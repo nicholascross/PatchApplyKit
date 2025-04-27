@@ -3,7 +3,8 @@ import Foundation
 public struct PatchApplier {
     private let begin = "*** Begin Patch"
     private let end = "*** End Patch"
-    private let dirPrefix = "+++ "
+    private let oldPrefix = "--- "
+    private let newPrefix = "+++ "
     private let hunkPrefix = "@@ "
 
     public let read: (String) throws -> String
@@ -85,29 +86,6 @@ public struct PatchApplier {
         try write(destination, updated)
     }
 
-    private func makeDirective(from line: String, seenPaths: inout Set<String>) throws -> Directive {
-        let components = line.dropFirst(dirPrefix.count).split(separator: " ")
-        guard components.count >= 2 else { throw PatchError.malformed(line) }
-        let verb = components[0]
-        let path = String(components[1])
-        if !seenPaths.insert(path).inserted { throw PatchError.duplicate(path) }
-        switch verb {
-        case "add":
-            return Directive(operation: .add, path: path, movePath: nil)
-        case "delete":
-            return Directive(operation: .delete, path: path, movePath: nil)
-        case "update":
-            return Directive(operation: .update, path: path, movePath: nil)
-        case "move":
-            guard components.count == 4, components[2] == "to" else {
-                throw PatchError.malformed(line)
-            }
-            return Directive(operation: .update, path: path, movePath: String(components[3]))
-        default:
-            throw PatchError.malformed("unknown verb \\(verb)")
-        }
-    }
-
     private func parse(_ text: String) throws -> [Directive] {
         guard
             let beginMarkerIndex = text.range(of: begin)?.upperBound,
@@ -121,27 +99,53 @@ public struct PatchApplier {
 
         var seenPaths = Set<String>()
         var directives: [Directive] = []
-        var currentDirective: Directive?
+        var currentDirectiveIndex: Int?
         var hunkBuffer: [String] = []
 
+        var oldPath: String?
+        var newPath: String?
+
         func flushHunk() throws {
-            guard var directive = currentDirective, !hunkBuffer.isEmpty else {
+            guard let idx = currentDirectiveIndex, !hunkBuffer.isEmpty else {
                 hunkBuffer.removeAll()
                 return
             }
             let hunkLines = try parseHunk(hunkBuffer)
-            directive.hunks.append(hunkLines)
-            directives[directives.count - 1] = directive
+            directives[idx].hunks.append(hunkLines)
             hunkBuffer.removeAll()
         }
 
         for line in lines {
-            if line.hasPrefix(dirPrefix) {
+            if line.hasPrefix(oldPrefix) {
                 try flushHunk()
-                let directive = try makeDirective(from: line, seenPaths: &seenPaths)
+                oldPath = String(line.dropFirst(oldPrefix.count))
+                newPath = nil
+                currentDirectiveIndex = nil
+            } else if line.hasPrefix(newPrefix) {
+                guard let old = oldPath else {
+                    throw PatchError.malformed("missing old file prefix before new file prefix")
+                }
+                let newP = String(line.dropFirst(newPrefix.count))
+                newPath = newP
+                let directive: Directive
+                if old == "/dev/null" {
+                    directive = Directive(operation: .add, path: newP, movePath: nil)
+                } else if newP == "/dev/null" {
+                    directive = Directive(operation: .delete, path: old, movePath: nil)
+                } else if old != newP {
+                    directive = Directive(operation: .update, path: old, movePath: newP)
+                } else {
+                    directive = Directive(operation: .update, path: old, movePath: nil)
+                }
+                if !seenPaths.insert(directive.path).inserted {
+                    throw PatchError.duplicate(directive.path)
+                }
                 directives.append(directive)
-                currentDirective = directive
-            } else if line.hasPrefix(hunkPrefix) || currentDirective != nil {
+                currentDirectiveIndex = directives.count - 1
+            } else if line.hasPrefix(hunkPrefix) {
+                try flushHunk()
+                hunkBuffer = [line]
+            } else if currentDirectiveIndex != nil {
                 hunkBuffer.append(line)
             }
         }

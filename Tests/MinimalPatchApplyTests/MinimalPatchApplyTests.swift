@@ -5,7 +5,8 @@ final class MinimalPatchApplyTests: XCTestCase {
     func testApplyAdd() throws {
         let patch = """
         *** Begin Patch
-        +++ add test.txt
+        --- /dev/null
+        +++ test.txt
         @@
         +Line1
         +Line2
@@ -27,13 +28,34 @@ final class MinimalPatchApplyTests: XCTestCase {
         try applier.apply(patch)
         XCTAssertEqual(fileSystem["test.txt"], "Line1\nLine2")
     }
+    func testHunkHeaderDisambiguatesSimilarHunks() throws {
+        let original = "foo\nbar\nbaz\nbar\nqux"
+        var fileSystem = ["dup.txt": original]
+        let patch = """
+        *** Begin Patch
+        --- dup.txt
+        +++ dup.txt
+        @@ -4,1 +4,1 @@
+        -bar
+        +BAR
+        *** End Patch
+        """
+        let applier = PatchApplier(
+            read: { path in fileSystem[path]! },
+            write: { path, data in fileSystem[path] = data },
+            remove: { _ in }
+        )
+        try applier.apply(patch)
+        XCTAssertEqual(fileSystem["dup.txt"], "foo\nbar\nbaz\nBAR\nqux")
+    }
 
     func testUpdateSimple() throws {
         let original = "A\nB\nC"
         var fileSystem = ["foo.txt": original]
         let patch = """
         *** Begin Patch
-        +++ update foo.txt
+        --- foo.txt
+        +++ foo.txt
         @@
          A
         -B
@@ -56,7 +78,8 @@ final class MinimalPatchApplyTests: XCTestCase {
         var fileSystem = ["del.txt": "data"]
         let patch = """
         *** Begin Patch
-        +++ delete del.txt
+        --- del.txt
+        +++ /dev/null
         @@
         *** End Patch
         """
@@ -78,7 +101,8 @@ final class MinimalPatchApplyTests: XCTestCase {
         var fileSystem = ["old.txt": "HELLO"]
         let patch = """
         *** Begin Patch
-        +++ move old.txt to new.txt
+        --- old.txt
+        +++ new.txt
         @@
          HELLO
         *** End Patch
@@ -99,17 +123,20 @@ final class MinimalPatchApplyTests: XCTestCase {
         var fileSystem = ["file2.txt": "X\nY\nZ", "file3.txt": "to delete"]
         let patch = """
         *** Begin Patch
-        +++ add file1.txt
+        --- /dev/null
+        +++ file1.txt
         @@
         +one
         +two
-        +++ update file2.txt
+        --- file2.txt
+        +++ file2.txt
         @@
          X
         -Y
         +Y2
          Z
-        +++ delete file3.txt
+        --- file3.txt
+        +++ /dev/null
         @@
         *** End Patch
         """
@@ -141,10 +168,12 @@ final class MinimalPatchApplyTests: XCTestCase {
     func testMalformedDuplicateDirective() {
         let patch = """
         *** Begin Patch
-        +++ add a.txt
+        --- /dev/null
+        +++ a.txt
         @@
         +A
-        +++ add a.txt
+        --- /dev/null
+        +++ a.txt
         @@
         +B
         *** End Patch
@@ -176,7 +205,8 @@ final class MinimalPatchApplyTests: XCTestCase {
         var fileSystem = ["ctx.txt": original]
         let patch = """
         *** Begin Patch
-        +++ update ctx.txt
+        --- ctx.txt
+        +++ ctx.txt
         @@
          wrong
         -line2
@@ -201,7 +231,8 @@ final class MinimalPatchApplyTests: XCTestCase {
         let fileSystem = ["one.txt": original]
         let patch = """
         *** Begin Patch
-        +++ update one.txt
+        --- one.txt
+        +++ one.txt
         @@
         -only
         -extra
@@ -218,5 +249,28 @@ final class MinimalPatchApplyTests: XCTestCase {
                 return XCTFail("Expected malformed delete OOB")
             }
         }
+    }
+    
+    func testHunkHeaderLineNumbersWithoutContext() throws {
+        let original = "L1\nL2\nL3\nL4"
+        var fileSystem = ["test.txt": original]
+        let patch = """
+        *** Begin Patch
+        --- test.txt
+        +++ test.txt
+        @@ -2,2 +2,2 @@
+        -L2
+        +X
+        -L3
+        +Y
+        *** End Patch
+        """
+        let applier = PatchApplier(
+            read: { path in fileSystem[path]! },
+            write: { path, data in fileSystem[path] = data },
+            remove: { _ in }
+        )
+        try applier.apply(patch)
+        XCTAssertEqual(fileSystem["test.txt"], "L1\nX\nY\nL4")
     }
 }

@@ -7,7 +7,7 @@ let package = Package(
         .library(
             name: "MinimalPatchApply",
             targets: ["MinimalPatchApply"]
-        ),
+        )
     ],
     dependencies: [
         // No external dependencies
@@ -21,6 +21,6 @@ let package = Package(
             name: "MinimalPatchApplyTests",
             dependencies: ["MinimalPatchApply"],
             path: "Tests/MinimalPatchApplyTests"
-        ),
+        )
     ]
 )

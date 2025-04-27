@@ -14,17 +14,17 @@ public struct PatchApplier {
         read: @escaping (String) throws
             -> String = { try String(contentsOfFile: $0, encoding: .utf8) },
         write: @escaping (String, String) throws -> Void = { path, data in
-            let fm = FileManager.default
-            try fm.createDirectory(
+            let fileManager = FileManager.default
+            try fileManager.createDirectory(
                 atPath: (path as NSString).deletingLastPathComponent,
                 withIntermediateDirectories: true
             )
             try data.write(toFile: path, atomically: true, encoding: .utf8)
         },
         remove: @escaping (String) throws -> Void = { path in
-            let fm = FileManager.default
-            if fm.fileExists(atPath: path) {
-                try fm.removeItem(atPath: path)
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: path) {
+                try fileManager.removeItem(atPath: path)
             }
         }
     ) {
@@ -91,19 +91,20 @@ public struct PatchApplier {
         var currentDirective: Directive?
         var hunkBuffer: [String] = []
 
-        func flushHunk() {
+        func flushHunk() throws {
             guard var directive = currentDirective, !hunkBuffer.isEmpty else {
                 hunkBuffer.removeAll()
                 return
             }
-            directive.hunks.append(try! parseHunk(hunkBuffer)) // safe; syntax already checked
+            let hunkLines = try parseHunk(hunkBuffer)
+            directive.hunks.append(hunkLines)
             directives[directives.count - 1] = directive
             hunkBuffer.removeAll()
         }
 
         for line in lines {
             if line.hasPrefix(dirPrefix) { // new directive
-                flushHunk()
+                try flushHunk()
                 let components = line.dropFirst(dirPrefix.count).split(separator: " ")
                 guard components.count >= 2 else { throw PatchError.malformed(line) }
                 let directiveVerb = components[0]
@@ -134,7 +135,7 @@ public struct PatchApplier {
                 hunkBuffer.append(line)
             }
         }
-        flushHunk()
+        try flushHunk()
         return directives
     }
 

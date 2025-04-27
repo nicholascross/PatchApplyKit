@@ -38,41 +38,51 @@ public struct PatchApplier {
         for directive in directives {
             switch directive.operation {
             case .add:
-                guard (try? read(directive.path)) == nil else {
-                    throw PatchError.exists(directive.path)
-                }
-                let content = directive.hunks
-                    .flatMap { $0 }
-                    .compactMap { line in
-                        switch line {
-                        case let .context(contextLine): return contextLine
-                        case let .insert(insertionLine): return insertionLine
-                        default: return nil
-                        }
-                    }
-                    .joined(separator: "\n")
-                try write(directive.path, content)
-
+                try handleAdd(directive)
             case .delete:
-                guard (try? read(directive.path)) != nil else {
-                    throw PatchError.missing(directive.path)
-                }
-                try remove(directive.path)
-
+                try handleDelete(directive)
             case .update:
-                guard let existingContent = try? read(directive.path) else {
-                    throw PatchError.missing(directive.path)
-                }
-                let updated = try directive.hunks.reduce(existingContent) {
-                    try applyHunk($1, to: $0)
-                }
-                let destination = directive.movePath ?? directive.path
-                if destination != directive.path {
-                    try remove(directive.path)
-                }
-                try write(destination, updated)
+                try handleUpdate(directive)
             }
         }
+    }
+
+    private func handleAdd(_ directive: Directive) throws {
+        guard (try? read(directive.path)) == nil else {
+            throw PatchError.exists(directive.path)
+        }
+        let content = directive.hunks
+            .flatMap { $0 }
+            .compactMap { line in
+                switch line {
+                case let .context(contextLine): return contextLine
+                case let .insert(insertionLine): return insertionLine
+                default: return nil
+                }
+            }
+            .joined(separator: "\n")
+        try write(directive.path, content)
+    }
+
+    private func handleDelete(_ directive: Directive) throws {
+        guard (try? read(directive.path)) != nil else {
+            throw PatchError.missing(directive.path)
+        }
+        try remove(directive.path)
+    }
+
+    private func handleUpdate(_ directive: Directive) throws {
+        guard let existingContent = try? read(directive.path) else {
+            throw PatchError.missing(directive.path)
+        }
+        let updated = try directive.hunks.reduce(existingContent) {
+            try applyHunk($1, to: $0)
+        }
+        let destination = directive.movePath ?? directive.path
+        if destination != directive.path {
+            try remove(directive.path)
+        }
+        try write(destination, updated)
     }
 
     private func parse(_ text: String) throws -> [Directive] {
@@ -193,7 +203,7 @@ public func applyPatch(
     write: @escaping (String, String) throws -> Void = { path, data in
         let fileManager = FileManager.default
         try fileManager.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
-                               withIntermediateDirectories: true)
+                                        withIntermediateDirectories: true)
         try data.write(toFile: path, atomically: true, encoding: .utf8)
     },
     remove: @escaping (String) throws -> Void = { path in

@@ -85,6 +85,29 @@ public struct PatchApplier {
         try write(destination, updated)
     }
 
+    private func makeDirective(from line: String, seenPaths: inout Set<String>) throws -> Directive {
+        let components = line.dropFirst(dirPrefix.count).split(separator: " ")
+        guard components.count >= 2 else { throw PatchError.malformed(line) }
+        let verb = components[0]
+        let path = String(components[1])
+        if !seenPaths.insert(path).inserted { throw PatchError.duplicate(path) }
+        switch verb {
+        case "add":
+            return Directive(operation: .add, path: path, movePath: nil)
+        case "delete":
+            return Directive(operation: .delete, path: path, movePath: nil)
+        case "update":
+            return Directive(operation: .update, path: path, movePath: nil)
+        case "move":
+            guard components.count == 4, components[2] == "to" else {
+                throw PatchError.malformed(line)
+            }
+            return Directive(operation: .update, path: path, movePath: String(components[3]))
+        default:
+            throw PatchError.malformed("unknown verb \\(verb)")
+        }
+    }
+
     private func parse(_ text: String) throws -> [Directive] {
         guard
             let beginMarkerIndex = text.range(of: begin)?.upperBound,
@@ -113,34 +136,11 @@ public struct PatchApplier {
         }
 
         for line in lines {
-            if line.hasPrefix(dirPrefix) { // new directive
+            if line.hasPrefix(dirPrefix) {
                 try flushHunk()
-                let components = line.dropFirst(dirPrefix.count).split(separator: " ")
-                guard components.count >= 2 else { throw PatchError.malformed(line) }
-                let directiveVerb = components[0]
-                let path = String(components[1])
-                if !seenPaths.insert(path).inserted { throw PatchError.duplicate(path) }
-
-                switch directiveVerb {
-                case "add":
-                    currentDirective = Directive(operation: .add, path: path, movePath: nil)
-                case "delete":
-                    currentDirective = Directive(operation: .delete, path: path, movePath: nil)
-                case "update":
-                    currentDirective = Directive(operation: .update, path: path, movePath: nil)
-                case "move":
-                    guard components.count == 4, components[2] == "to" else {
-                        throw PatchError.malformed(line)
-                    }
-                    currentDirective = Directive(
-                        operation: .update,
-                        path: path,
-                        movePath: String(components[3])
-                    )
-                default:
-                    throw PatchError.malformed("unknown verb \(directiveVerb)")
-                }
-                directives.append(currentDirective!)
+                let directive = try makeDirective(from: line, seenPaths: &seenPaths)
+                directives.append(directive)
+                currentDirective = directive
             } else if line.hasPrefix(hunkPrefix) || currentDirective != nil {
                 hunkBuffer.append(line)
             }

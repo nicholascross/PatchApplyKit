@@ -77,11 +77,11 @@ private func parseHunk(_ lines: [String]) throws -> [Line] {
     var parsedLines: [Line] = []
     for lineContent in lines.dropFirst() {
         if lineContent.hasPrefix("+") {
-            parsedLines.append(.ins(String(lineContent.dropFirst())))
+            parsedLines.append(.insert(String(lineContent.dropFirst())))
         } else if lineContent.hasPrefix("-") {
-            parsedLines.append(.del(String(lineContent.dropFirst())))
+            parsedLines.append(.delete(String(lineContent.dropFirst())))
         } else if lineContent.hasPrefix(" ") {
-            parsedLines.append(.ctx(String(lineContent.dropFirst())))
+            parsedLines.append(.context(String(lineContent.dropFirst())))
         }
     }
     return parsedLines
@@ -98,18 +98,18 @@ private func apply(_ hunk: [Line], to old: String) throws -> String {
     }
     for patchLine in hunk {
         switch patchLine {
-        case let .ctx(contextLine):
+        case let .context(contextLine):
             guard currentIndex < bufferLines.count,
                   normalizeWhitespace(bufferLines[currentIndex]) == normalizeWhitespace(contextLine) else {
                 throw PatchError.malformed("context mismatch while patching")
             }
             currentIndex += 1
-        case .del:
+        case .delete:
             guard currentIndex < bufferLines.count else {
                 throw PatchError.malformed("delete OOB")
             }
             bufferLines.remove(at: currentIndex)
-        case let .ins(insertionLine):
+        case let .insert(insertionLine):
             bufferLines.insert(insertionLine, at: currentIndex)
             currentIndex += 1
         }
@@ -145,8 +145,8 @@ public func applyPatch(
                 .flatMap { $0 }
                 .compactMap { line in
                     switch line {
-                    case let .ctx(contextLine): return contextLine
-                    case let .ins(insertionLine): return insertionLine
+                    case let .context(contextLine): return contextLine
+                    case let .insert(insertionLine): return insertionLine
                     default: return nil
                     }
                 }

@@ -1,5 +1,5 @@
 enum Line {
-    case ctx(String)
-    case del(String)
-    case ins(String)
+    case context(String)
+    case delete(String)
+    case insert(String)
 }

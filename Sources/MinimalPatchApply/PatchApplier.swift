@@ -195,23 +195,3 @@ public struct PatchApplier {
         return bufferLines.joined(separator: "\n")
     }
 }
-
-// ────────────────────────────── Public API ────────────────────────────────────
-public func applyPatch(
-    _ patch: String,
-    read: @escaping (String) throws -> String = { try String(contentsOfFile: $0, encoding: .utf8) },
-    write: @escaping (String, String) throws -> Void = { path, data in
-        let fileManager = FileManager.default
-        try fileManager.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
-                                        withIntermediateDirectories: true)
-        try data.write(toFile: path, atomically: true, encoding: .utf8)
-    },
-    remove: @escaping (String) throws -> Void = { path in
-        if FileManager.default.fileExists(atPath: path) {
-            try FileManager.default.removeItem(atPath: path)
-        }
-    }
-) throws {
-    let applier = PatchApplier(read: read, write: write, remove: remove)
-    try applier.apply(patch)
-}

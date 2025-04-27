@@ -12,8 +12,7 @@ final class MinimalPatchApplyTests: XCTestCase {
         *** End Patch
         """
         var fileSystem = [String: String]()
-        try applyPatch(
-            patch,
+        let applier = PatchApplier(
             read: { path in
                 if let content = fileSystem[path] {
                     return content
@@ -25,6 +24,7 @@ final class MinimalPatchApplyTests: XCTestCase {
             },
             remove: { _ in }
         )
+        try applier.apply(patch)
         XCTAssertEqual(fileSystem["test.txt"], "Line1\nLine2")
     }
 
@@ -42,12 +42,12 @@ final class MinimalPatchApplyTests: XCTestCase {
         *** End Patch
         """
         var removed = [String]()
-        try applyPatch(
-            patch,
+        let applier = PatchApplier(
             read: { path in fileSystem[path]! },
             write: { path, data in fileSystem[path] = data },
             remove: { removed.append($0) }
         )
+        try applier.apply(patch)
         XCTAssertEqual(fileSystem["foo.txt"], "A\nX\nC")
         XCTAssertTrue(removed.isEmpty)
     }
@@ -61,8 +61,7 @@ final class MinimalPatchApplyTests: XCTestCase {
         *** End Patch
         """
         var removed = [String]()
-        try applyPatch(
-            patch,
+        let applier = PatchApplier(
             read: { path in
                 if let contents = fileSystem[path] { return contents }
                 throw PatchError.missing(path)
@@ -70,6 +69,7 @@ final class MinimalPatchApplyTests: XCTestCase {
             write: { _, _ in XCTFail("Should not write") },
             remove: { fileSystem.removeValue(forKey: $0); removed.append($0) }
         )
+        try applier.apply(patch)
         XCTAssertNil(fileSystem["del.txt"])
         XCTAssertEqual(removed, ["del.txt"])
     }
@@ -84,12 +84,12 @@ final class MinimalPatchApplyTests: XCTestCase {
         *** End Patch
         """
         var removed = [String]()
-        try applyPatch(
-            patch,
+        let applier = PatchApplier(
             read: { path in fileSystem[path]! },
             write: { path, data in fileSystem[path] = data },
             remove: { fileSystem.removeValue(forKey: $0); removed.append($0) }
         )
+        try applier.apply(patch)
         XCTAssertNil(fileSystem["old.txt"])
         XCTAssertEqual(fileSystem["new.txt"], "HELLO")
         XCTAssertEqual(removed, ["old.txt"])
@@ -113,8 +113,7 @@ final class MinimalPatchApplyTests: XCTestCase {
         @@
         *** End Patch
         """
-        try applyPatch(
-            patch,
+        let applier = PatchApplier(
             read: { path in
                 if let content = fileSystem[path] {
                     return content
@@ -124,6 +123,7 @@ final class MinimalPatchApplyTests: XCTestCase {
             write: { path, data in fileSystem[path] = data },
             remove: { fileSystem.removeValue(forKey: $0) }
         )
+        try applier.apply(patch)
         XCTAssertEqual(fileSystem["file1.txt"], "one\ntwo")
         XCTAssertEqual(fileSystem["file2.txt"], "X\nY2\nZ")
         XCTAssertNil(fileSystem["file3.txt"])
@@ -131,7 +131,7 @@ final class MinimalPatchApplyTests: XCTestCase {
 
     func testMalformedMissingMarkers() {
         let patch = "no markers here"
-        XCTAssertThrowsError(try applyPatch(patch)) { error in
+        XCTAssertThrowsError(try PatchApplier().apply(patch)) { error in
             guard case PatchError.malformed = error else {
                 return XCTFail("Expected malformed error")
             }
@@ -149,7 +149,7 @@ final class MinimalPatchApplyTests: XCTestCase {
         +B
         *** End Patch
         """
-        XCTAssertThrowsError(try applyPatch(patch)) { error in
+        XCTAssertThrowsError(try PatchApplier().apply(patch)) { error in
             guard case let PatchError.duplicate(path) = error, path == "a.txt" else {
                 return XCTFail("Expected duplicate error for a.txt")
             }
@@ -164,7 +164,7 @@ final class MinimalPatchApplyTests: XCTestCase {
         +A
         *** End Patch
         """
-        XCTAssertThrowsError(try applyPatch(patch)) { error in
+        XCTAssertThrowsError(try PatchApplier().apply(patch)) { error in
             guard case PatchError.malformed = error else {
                 return XCTFail("Expected malformed error")
             }
@@ -184,12 +184,11 @@ final class MinimalPatchApplyTests: XCTestCase {
         *** End Patch
         """
         XCTAssertThrowsError(
-            try applyPatch(
-                patch,
+            try PatchApplier(
                 read: { fileSystem[$0]! },
                 write: { path, data in fileSystem[path] = data },
                 remove: { _ in }
-            )
+            ).apply(patch)
         ) { error in
             guard case PatchError.malformed = error else {
                 return XCTFail("Expected malformed context mismatch")
@@ -209,12 +208,11 @@ final class MinimalPatchApplyTests: XCTestCase {
         *** End Patch
         """
         XCTAssertThrowsError(
-            try applyPatch(
-                patch,
+            try PatchApplier(
                 read: { fileSystem[$0]! },
                 write: { _, _ in },
                 remove: { _ in }
-            )
+            ).apply(patch)
         ) { error in
             guard case PatchError.malformed = error else {
                 return XCTFail("Expected malformed delete OOB")

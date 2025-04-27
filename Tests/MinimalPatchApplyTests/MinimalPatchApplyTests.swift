@@ -274,4 +274,28 @@ final class MinimalPatchApplyTests: XCTestCase {
         try applier.apply(patch)
         XCTAssertEqual(fileSystem["test.txt"], "L1\nX\nY\nL4")
     }
+
+    func testMultipleHunksPreserveUnmodifiedContent() throws {
+        let original = "A\nB\nC\nD\nE"
+        var fileSystem = ["file.txt": original]
+        let patch = """
+        *** Begin Patch
+        --- file.txt
+        +++ file.txt
+        @@ -1 +1 @@
+        -A
+        +a
+        @@ -5 +5 @@
+        -E
+        +e
+        *** End Patch
+        """
+        let applier = PatchApplier(
+            read: { path in fileSystem[path]! },
+            write: { path, data in fileSystem[path] = data },
+            remove: { _ in }
+        )
+        try applier.apply(patch)
+        XCTAssertEqual(fileSystem["file.txt"], "a\nB\nC\nD\ne")
+    }
 }

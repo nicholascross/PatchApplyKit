@@ -87,30 +87,33 @@ public struct PatchApplier {
     }
 
     private func parse(_ text: String) throws -> [Directive] {
-        guard
-            let beginMarkerIndex = text.range(of: begin)?.upperBound,
-            let endMarkerIndex = text.range(of: end)?.lowerBound
+        let lines = try extractPatchLines(from: text)
+        return try parseDirectives(from: lines)
+    }
+
+    private func extractPatchLines(from text: String) throws -> [String] {
+        guard let start = text.range(of: begin)?.upperBound,
+              let end = text.range(of: end)?.lowerBound
         else {
             throw PatchError.malformed("missing begin/end markers")
         }
-        let lines = text[beginMarkerIndex ..< endMarkerIndex]
+        return text[start..<end]
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
+    }
 
+    private func parseDirectives(from lines: [String]) throws -> [Directive] {
         var seenPaths = Set<String>()
-        var directives: [Directive] = []
+        var directives = [Directive]()
         var currentDirectiveIndex: Int?
-        var hunkBuffer: [String] = []
-
+        var hunkBuffer = [String]()
         var oldPath: String?
-        var newPath: String?
 
         func flushHunk() throws {
             guard let idx = currentDirectiveIndex, !hunkBuffer.isEmpty else {
                 hunkBuffer.removeAll()
                 return
             }
-            // Parse the buffered hunk (including header) into a Hunk object
             let hunk = try parseHunk(hunkBuffer)
             directives[idx].hunks.append(hunk)
             hunkBuffer.removeAll()
@@ -120,25 +123,15 @@ public struct PatchApplier {
             if line.hasPrefix(oldPrefix) {
                 try flushHunk()
                 oldPath = String(line.dropFirst(oldPrefix.count))
-                newPath = nil
                 currentDirectiveIndex = nil
             } else if line.hasPrefix(newPrefix) {
+                try flushHunk()
                 guard let old = oldPath else {
                     throw PatchError.malformed("missing old file prefix before new file prefix")
                 }
                 let newP = String(line.dropFirst(newPrefix.count))
-                newPath = newP
-                let directive: Directive
-                if old == "/dev/null" {
-                    directive = Directive(operation: .add, path: newP, movePath: nil)
-                } else if newP == "/dev/null" {
-                    directive = Directive(operation: .delete, path: old, movePath: nil)
-                } else if old != newP {
-                    directive = Directive(operation: .update, path: old, movePath: newP)
-                } else {
-                    directive = Directive(operation: .update, path: old, movePath: nil)
-                }
-                if !seenPaths.insert(directive.path).inserted {
+                let directive = makeDirective(old: old, new: newP)
+                guard seenPaths.insert(directive.path).inserted else {
                     throw PatchError.duplicate(directive.path)
                 }
                 directives.append(directive)
@@ -154,19 +147,43 @@ public struct PatchApplier {
         return directives
     }
 
+    private func makeDirective(old: String, new newP: String) -> Directive {
+        let operation: Operation
+        let path: String
+        var movePath: String?
+        if old == "/dev/null" {
+            operation = .add
+            path = newP
+        } else if newP == "/dev/null" {
+            operation = .delete
+            path = old
+        } else {
+            operation = .update
+            path = old
+            if old != newP {
+                movePath = newP
+            }
+        }
+        return Directive(operation: operation, path: path, movePath: movePath)
+    }
+
     /// Parses a raw hunk buffer (including header) into a Hunk with header metadata and lines
     private func parseHunk(_ lines: [String]) throws -> Hunk {
         // Extract header line (e.g., "@@ -l,k +l',k' @@")
         let rawHeader = lines.first ?? ""
         // Initialize optional header fields
-        var oldStart: Int? = nil, oldCount: Int? = nil
-        var newStart: Int? = nil, newCount: Int? = nil
+        var oldStart: Int?, oldCount: Int?
+        var newStart: Int?, newCount: Int?
         // Trim whitespace for parsing
         let trimmed = rawHeader.trimmingCharacters(in: .whitespaces)
         // Regex to match unified diff hunk header with line numbers
         let pattern = "^@@\\s*-(\\d+)(?:,(\\d+))?\\s+\\+(\\d+)(?:,(\\d+))?\\s*@@"
         if let regex = try? NSRegularExpression(pattern: pattern),
-           let match = regex.firstMatch(in: trimmed, options: [], range: NSRange(location: 0, length: trimmed.utf16.count)) {
+           let match = regex.firstMatch(
+                in: trimmed,
+                options: [],
+                range: NSRange(location: 0, length: trimmed.utf16.count)
+           ) {
             // Helper to extract capture group
             func group(_ idx: Int) -> String? {
                 let range = match.range(at: idx)
@@ -176,10 +193,10 @@ public struct PatchApplier {
                 }
                 return String(trimmed[swiftRange])
             }
-            if let s = group(1) { oldStart = Int(s) }
-            if let c = group(2) { oldCount = Int(c) } else { oldCount = 1 }
-            if let s = group(3) { newStart = Int(s) }
-            if let c = group(4) { newCount = Int(c) } else { newCount = 1 }
+            if let oldStartString = group(1) { oldStart = Int(oldStartString) }
+            if let oldCountString = group(2) { oldCount = Int(oldCountString) } else { oldCount = 1 }
+            if let newStartString = group(3) { newStart = Int(newStartString) }
+            if let newCountString = group(4) { newCount = Int(newCountString) } else { newCount = 1 }
         }
         // Parse individual lines (skip header)
         var parsedLines: [Line] = []
@@ -201,72 +218,59 @@ public struct PatchApplier {
         )
     }
 
-    /// Applies a parsed Hunk to the given content, honoring header line numbers and falling back to context search
     private func applyHunk(_ hunk: Hunk, to old: String) throws -> String {
         let originalLines = old.split(whereSeparator: \.isNewline).map(String.init)
-        // Helper to normalize whitespace for context matching
-        func normalizeWhitespace(_ input: String) -> String {
-            input.replacingOccurrences(of: "\\s+", with: " ",
-                                       options: .regularExpression)
-        }
-        // Core apply logic at a given starting index
-        func tryApply(at seed: Int) throws -> [String] {
-            var lines = originalLines
-            var idx = seed
-            for patchLine in hunk.lines {
-                switch patchLine {
-                case let .context(contextLine):
-                    guard idx < lines.count,
-                          normalizeWhitespace(lines[idx]) == normalizeWhitespace(contextLine)
-                    else {
-                        throw PatchError.malformed("context mismatch while patching")
-                    }
-                    idx += 1
-                case .delete:
-                    guard idx < lines.count else {
-                        throw PatchError.malformed("delete OOB")
-                    }
-                    lines.remove(at: idx)
-                case let .insert(insertionLine):
-                    lines.insert(insertionLine, at: idx)
-                    idx += 1
-                }
-            }
-            return lines
-        }
-        // 1. Try header-based application if oldStart is specified
+        // 1. Try header-based apply
         if let oldStart = hunk.oldStart {
             let seed = max(0, oldStart - 1)
-            do {
-                let applied = try tryApply(at: seed)
+            if let applied = try? tryApply(hunk: hunk, originalLines: originalLines, seed: seed) {
                 return applied.joined(separator: "\n")
-            } catch {
-                // Fall through to fallback logic if header-based apply fails
             }
         }
-        // 2. Fallback: if no header and no context lines, apply at beginning (original behavior)
+        // 2. Fallback to beginning when no context
         let hasContext = hunk.lines.contains { if case .context = $0 { return true } else { return false } }
         if hunk.oldStart == nil && !hasContext {
-            let applied = try tryApply(at: 0)
+            let applied = try tryApply(hunk: hunk, originalLines: originalLines, seed: 0)
             return applied.joined(separator: "\n")
         }
-        // 3. Exhaustive search for unique context match
-        var successfulApplies: [[String]] = []
-        let searchRange = 0...originalLines.count
-        for seed in searchRange {
-            do {
-                let applied = try tryApply(at: seed)
+        // 3. Exhaustive search for unique match
+        var successfulApplies = [[String]]()
+        for seed in 0...originalLines.count {
+            if let applied = try? tryApply(hunk: hunk, originalLines: originalLines, seed: seed) {
                 successfulApplies.append(applied)
-            } catch {
-                continue
             }
         }
         if successfulApplies.count == 1 {
             return successfulApplies[0].joined(separator: "\n")
-        } else if successfulApplies.isEmpty {
-            throw PatchError.malformed("context mismatch while patching")
-        } else {
-            throw PatchError.malformed("ambiguous hunk match")
         }
+        if successfulApplies.isEmpty {
+            throw PatchError.malformed("context mismatch while patching")
+        }
+        throw PatchError.malformed("ambiguous hunk match")
+    }
+
+    private func normalizeWhitespace(_ input: String) -> String {
+        input.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    private func tryApply(hunk: Hunk, originalLines: [String], seed: Int) throws -> [String] {
+        var lines = originalLines
+        var idx = seed
+        for patchLine in hunk.lines {
+            switch patchLine {
+            case let .context(contextLine):
+                guard idx < lines.count,
+                      normalizeWhitespace(lines[idx]) == normalizeWhitespace(contextLine)
+                else { throw PatchError.malformed("context mismatch while patching") }
+                idx += 1
+            case .delete:
+                guard idx < lines.count else { throw PatchError.malformed("delete OOB") }
+                lines.remove(at: idx)
+            case let .insert(insertionLine):
+                lines.insert(insertionLine, at: idx)
+                idx += 1
+            }
+        }
+        return lines
     }
 }

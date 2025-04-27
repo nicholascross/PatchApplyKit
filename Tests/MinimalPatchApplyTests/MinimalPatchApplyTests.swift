@@ -28,6 +28,7 @@ final class MinimalPatchApplyTests: XCTestCase {
         try applier.apply(patch)
         XCTAssertEqual(fileSystem["test.txt"], "Line1\nLine2")
     }
+
     func testHunkHeaderDisambiguatesSimilarHunks() throws {
         let original = "foo\nbar\nbaz\nbar\nqux"
         var fileSystem = ["dup.txt": original]
@@ -250,7 +251,7 @@ final class MinimalPatchApplyTests: XCTestCase {
             }
         }
     }
-    
+
     func testHunkHeaderLineNumbersWithoutContext() throws {
         let original = "L1\nL2\nL3\nL4"
         var fileSystem = ["test.txt": original]

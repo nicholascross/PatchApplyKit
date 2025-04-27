@@ -1,5 +1,5 @@
-import XCTest
 @testable import MinimalPatchApply
+import XCTest
 
 final class MinimalPatchApplyTests: XCTestCase {
     func testApplyAdd() throws {
@@ -11,25 +11,26 @@ final class MinimalPatchApplyTests: XCTestCase {
         +Line2
         *** End Patch
         """
-        var fs = [String: String]()
+        var fileSystem = [String: String]()
         try applyPatch(
             patch,
             read: { path in
-                if let content = fs[path] {
+                if let content = fileSystem[path] {
                     return content
                 }
                 throw PatchError.missing(path)
             },
             write: { path, data in
-                fs[path] = data
+                fileSystem[path] = data
             },
             remove: { _ in }
         )
-        XCTAssertEqual(fs["test.txt"], "Line1\nLine2")
+        XCTAssertEqual(fileSystem["test.txt"], "Line1\nLine2")
     }
+
     func testUpdateSimple() throws {
         let original = "A\nB\nC"
-        var fs = ["foo.txt": original]
+        var fileSystem = ["foo.txt": original]
         let patch = """
         *** Begin Patch
         +++ update foo.txt
@@ -43,16 +44,16 @@ final class MinimalPatchApplyTests: XCTestCase {
         var removed = [String]()
         try applyPatch(
             patch,
-            read: { path in fs[path]! },
-            write: { path, data in fs[path] = data },
+            read: { path in fileSystem[path]! },
+            write: { path, data in fileSystem[path] = data },
             remove: { removed.append($0) }
         )
-        XCTAssertEqual(fs["foo.txt"], "A\nX\nC")
+        XCTAssertEqual(fileSystem["foo.txt"], "A\nX\nC")
         XCTAssertTrue(removed.isEmpty)
     }
 
     func testDeleteFile() throws {
-        var fs = ["del.txt": "data"]
+        var fileSystem = ["del.txt": "data"]
         let patch = """
         *** Begin Patch
         +++ delete del.txt
@@ -63,18 +64,18 @@ final class MinimalPatchApplyTests: XCTestCase {
         try applyPatch(
             patch,
             read: { path in
-                if let c = fs[path] { return c }
+                if let contents = fileSystem[path] { return contents }
                 throw PatchError.missing(path)
             },
-            write: { _,_ in XCTFail("Should not write") },
-            remove: { fs.removeValue(forKey: $0); removed.append($0) }
+            write: { _, _ in XCTFail("Should not write") },
+            remove: { fileSystem.removeValue(forKey: $0); removed.append($0) }
         )
-        XCTAssertNil(fs["del.txt"] )
+        XCTAssertNil(fileSystem["del.txt"])
         XCTAssertEqual(removed, ["del.txt"])
     }
 
     func testMoveFile() throws {
-        var fs = ["old.txt": "HELLO"]
+        var fileSystem = ["old.txt": "HELLO"]
         let patch = """
         *** Begin Patch
         +++ move old.txt to new.txt
@@ -85,17 +86,17 @@ final class MinimalPatchApplyTests: XCTestCase {
         var removed = [String]()
         try applyPatch(
             patch,
-            read: { path in fs[path]! },
-            write: { path, data in fs[path] = data },
-            remove: { fs.removeValue(forKey: $0); removed.append($0) }
+            read: { path in fileSystem[path]! },
+            write: { path, data in fileSystem[path] = data },
+            remove: { fileSystem.removeValue(forKey: $0); removed.append($0) }
         )
-        XCTAssertNil(fs["old.txt"])
-        XCTAssertEqual(fs["new.txt"], "HELLO")
+        XCTAssertNil(fileSystem["old.txt"])
+        XCTAssertEqual(fileSystem["new.txt"], "HELLO")
         XCTAssertEqual(removed, ["old.txt"])
     }
 
     func testMultipleDirectives() throws {
-        var fs = ["file2.txt": "X\nY\nZ", "file3.txt": "to delete"]
+        var fileSystem = ["file2.txt": "X\nY\nZ", "file3.txt": "to delete"]
         let patch = """
         *** Begin Patch
         +++ add file1.txt
@@ -115,17 +116,17 @@ final class MinimalPatchApplyTests: XCTestCase {
         try applyPatch(
             patch,
             read: { path in
-                if let content = fs[path] {
+                if let content = fileSystem[path] {
                     return content
                 }
                 throw PatchError.missing(path)
             },
-            write: { path, data in fs[path] = data },
-            remove: { fs.removeValue(forKey: $0) }
+            write: { path, data in fileSystem[path] = data },
+            remove: { fileSystem.removeValue(forKey: $0) }
         )
-        XCTAssertEqual(fs["file1.txt"], "one\ntwo")
-        XCTAssertEqual(fs["file2.txt"], "X\nY2\nZ")
-        XCTAssertNil(fs["file3.txt"])
+        XCTAssertEqual(fileSystem["file1.txt"], "one\ntwo")
+        XCTAssertEqual(fileSystem["file2.txt"], "X\nY2\nZ")
+        XCTAssertNil(fileSystem["file3.txt"])
     }
 
     func testMalformedMissingMarkers() {
@@ -149,7 +150,7 @@ final class MinimalPatchApplyTests: XCTestCase {
         *** End Patch
         """
         XCTAssertThrowsError(try applyPatch(patch)) { error in
-            guard case PatchError.duplicate(let path) = error, path == "a.txt" else {
+            guard case let PatchError.duplicate(path) = error, path == "a.txt" else {
                 return XCTFail("Expected duplicate error for a.txt")
             }
         }
@@ -172,7 +173,7 @@ final class MinimalPatchApplyTests: XCTestCase {
 
     func testContextMismatch() {
         let original = "line1\nline2"
-        var fs = ["ctx.txt": original]
+        var fileSystem = ["ctx.txt": original]
         let patch = """
         *** Begin Patch
         +++ update ctx.txt
@@ -185,8 +186,8 @@ final class MinimalPatchApplyTests: XCTestCase {
         XCTAssertThrowsError(
             try applyPatch(
                 patch,
-                read: { fs[$0]! },
-                write: { path, data in fs[path] = data },
+                read: { fileSystem[$0]! },
+                write: { path, data in fileSystem[path] = data },
                 remove: { _ in }
             )
         ) { error in
@@ -198,7 +199,7 @@ final class MinimalPatchApplyTests: XCTestCase {
 
     func testDeleteOOB() {
         let original = "only"
-        var fs = ["one.txt": original]
+        let fileSystem = ["one.txt": original]
         let patch = """
         *** Begin Patch
         +++ update one.txt
@@ -210,8 +211,8 @@ final class MinimalPatchApplyTests: XCTestCase {
         XCTAssertThrowsError(
             try applyPatch(
                 patch,
-                read: { fs[$0]! },
-                write: { _,_ in },
+                read: { fileSystem[$0]! },
+                write: { _, _ in },
                 remove: { _ in }
             )
         ) { error in

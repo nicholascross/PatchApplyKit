@@ -8,54 +8,34 @@
 
 import Foundation
 
-// ────────────────────────────── Errors ────────────────────────────────────────
-public enum PatchError: Error, CustomStringConvertible {
-    case malformed(String), duplicate(String), missing(String), exists(String)
-    public var description: String {
-        switch self {
-        case .malformed(let m): return "Malformed patch – \(m)"
-        case .duplicate(let p): return "Duplicate directive for ‘\(p)’"
-        case .missing(let p):   return "File not found: \(p)"
-        case .exists(let p):    return "File already exists: \(p)"
-        }
-    }
-}
-
-// ────────────────────────── Internal structures ──────────────────────────────
-private enum Op { case add, delete, update }
-private struct Dir {                // a single directive
-    let op: Op
-    let path: String
-    let movePath: String?
-    var hunks: [[Line]] = []
-}
-private enum Line { case ctx(String), del(String), ins(String) }
-
 // ───────────────────────── Parsing (*** Begin Patch …) ───────────────────────
 private let begin = "*** Begin Patch"
-private let end   = "*** End Patch"
+private let end = "*** End Patch"
 private let dirPrefix = "+++ "
 private let hunkPrefix = "@@ "
 
-private func parse(_ text: String) throws -> [Dir] {
-    guard let b = text.range(of: begin)?.upperBound,
-          let e = text.range(of: end)?.lowerBound else {
+private func parse(_ text: String) throws -> [Directive] {
+    guard
+        let b = text.range(of: begin)?.upperBound,
+        let e = text.range(of: end)?.lowerBound
+    else {
         throw PatchError.malformed("missing begin/end markers")
     }
-    let lines = text[b..<e].split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let lines = text[b ..< e].split(separator: "\n", omittingEmptySubsequences: false)
+        .map(String.init)
 
-    var seen = Set<String>(), dirs: [Dir] = [], current: Dir?
+    var seen = Set<String>(), dirs: [Directive] = [], current: Directive?
     var hunkBuf: [String] = []
 
     func flushHunk() {
         guard var d = current, !hunkBuf.isEmpty else { hunkBuf.removeAll(); return }
-        d.hunks.append(try! parseHunk(hunkBuf))           // safe; syntax already checked
+        d.hunks.append(try! parseHunk(hunkBuf)) // safe; syntax already checked
         dirs[dirs.count - 1] = d
         hunkBuf.removeAll()
     }
 
     for l in lines {
-        if l.hasPrefix(dirPrefix) {                       // new directive
+        if l.hasPrefix(dirPrefix) { // new directive
             flushHunk()
             let comps = l.dropFirst(dirPrefix.count).split(separator: " ")
             guard comps.count >= 2 else { throw PatchError.malformed(l) }
@@ -63,13 +43,13 @@ private func parse(_ text: String) throws -> [Dir] {
             if !seen.insert(path).inserted { throw PatchError.duplicate(path) }
 
             switch verb {
-            case "add":    current = Dir(op: .add,    path: path, movePath: nil)
-            case "delete": current = Dir(op: .delete, path: path, movePath: nil)
-            case "update": current = Dir(op: .update, path: path, movePath: nil)
+            case "add": current = Directive(operation: .add, path: path, movePath: nil)
+            case "delete": current = Directive(operation: .delete, path: path, movePath: nil)
+            case "update": current = Directive(operation: .update, path: path, movePath: nil)
             case "move":
                 guard comps.count == 4, comps[2] == "to"
                 else { throw PatchError.malformed(l) }
-                current = Dir(op: .update, path: path, movePath: String(comps[3]))
+                current = Directive(operation: .update, path: path, movePath: String(comps[3]))
             default: throw PatchError.malformed("unknown verb \(verb)")
             }
             dirs.append(current!)
@@ -83,7 +63,7 @@ private func parse(_ text: String) throws -> [Dir] {
 
 private func parseHunk(_ lines: [String]) throws -> [Line] {
     var out: [Line] = []
-    for l in lines.dropFirst() {        // header ignored (already validated by diff producer)
+    for l in lines.dropFirst() { // header ignored (already validated by diff producer)
         if l.hasPrefix("+") { out.append(.ins(String(l.dropFirst()))) }
         else if l.hasPrefix("-") { out.append(.del(String(l.dropFirst()))) }
         else if l.hasPrefix(" ") { out.append(.ctx(String(l.dropFirst()))) }
@@ -99,14 +79,14 @@ private func apply(_ hunk: [Line], to old: String) throws -> String {
                                                               options: .regularExpression) }
     for l in hunk {
         switch l {
-        case .ctx(let s):
+        case let .ctx(s):
             guard idx < buf.count, norm(buf[idx]) == norm(s) else {
                 throw PatchError.malformed("context mismatch while patching")
             }; idx += 1
         case .del:
             guard idx < buf.count else { throw PatchError.malformed("delete OOB") }
             buf.remove(at: idx)
-        case .ins(let s):
+        case let .ins(s):
             buf.insert(s, at: idx); idx += 1
         }
     }
@@ -116,8 +96,8 @@ private func apply(_ hunk: [Line], to old: String) throws -> String {
 // ────────────────────────────── Public API ────────────────────────────────────
 public func applyPatch(
     _ patch: String,
-    read:   (String) throws -> String = { try String(contentsOfFile: $0, encoding: .utf8) },
-    write:  (String,String) throws -> Void = { path, data in
+    read: (String) throws -> String = { try String(contentsOfFile: $0, encoding: .utf8) },
+    write: (String, String) throws -> Void = { path, data in
         let fm = FileManager.default
         try fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
                                withIntermediateDirectories: true)
@@ -131,13 +111,13 @@ public func applyPatch(
 ) throws {
     let dirs = try parse(patch)
     for d in dirs {
-        switch d.op {
+        switch d.operation {
         case .add:
             guard (try? read(d.path)) == nil else { throw PatchError.exists(d.path) }
             // Extract context and insertion lines as content for new file
             let content = d.hunks.flatMap { $0 }.compactMap { line in
                 switch line {
-                case .ctx(let s), .ins(let s): return s
+                case let .ctx(s), let .ins(s): return s
                 default: return nil
                 }
             }.joined(separator: "\n")

@@ -26,6 +26,7 @@ public struct PatchDirective: Equatable {
     public let oldPath: String?
     public let newPath: String?
     public let hunks: [PatchHunk]
+    public let binaryPatch: PatchBinaryPatch?
     public let operation: PatchOperation
     public let metadata: PatchDirectiveMetadata
 
@@ -34,6 +35,7 @@ public struct PatchDirective: Equatable {
         oldPath: String?,
         newPath: String?,
         hunks: [PatchHunk],
+        binaryPatch: PatchBinaryPatch? = nil,
         operation: PatchOperation,
         metadata: PatchDirectiveMetadata = PatchDirectiveMetadata()
     ) {
@@ -41,6 +43,7 @@ public struct PatchDirective: Equatable {
         self.oldPath = oldPath
         self.newPath = newPath
         self.hunks = hunks
+        self.binaryPatch = binaryPatch
         self.operation = operation
         self.metadata = metadata
     }
@@ -96,6 +99,48 @@ public enum PatchLine: Equatable {
     case addition(String)
     case deletion(String)
     case noNewlineMarker
+}
+
+/// Represents a binary diff payload consisting of git-style literal or delta blocks.
+public struct PatchBinaryPatch: Equatable {
+    public struct Block: Equatable {
+        public enum Kind: Equatable {
+            case literal
+            case delta
+        }
+
+        public let kind: Kind
+        public let expectedSize: Int
+        public let data: Data
+
+        public init(kind: Kind, expectedSize: Int, data: Data) {
+            self.kind = kind
+            self.expectedSize = expectedSize
+            self.data = data
+        }
+    }
+
+    public let blocks: [Block]
+
+    public init(blocks: [Block]) {
+        self.blocks = blocks
+    }
+
+    public var newBlock: Block? {
+        blocks.first
+    }
+
+    public var oldBlock: Block? {
+        blocks.dropFirst().first
+    }
+
+    public var newData: Data? {
+        newBlock?.data
+    }
+
+    public var oldData: Data? {
+        oldBlock?.data
+    }
 }
 
 /// Structured error type thrown during parsing or application.

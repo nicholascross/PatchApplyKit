@@ -99,6 +99,14 @@ public struct PatchApplicator {
         guard !fileSystem.fileExists(at: target) else {
             throw PatchEngineError.validationFailed("destination already exists: \(target)")
         }
+        if let binaryPatch = directive.binaryPatch {
+            guard let newData = binaryPatch.newData else {
+                throw PatchEngineError.validationFailed("binary add directive missing payload for \(target)")
+            }
+            try write(data: newData, to: target)
+            try applyFileMode(for: directive, to: target)
+            return
+        }
         let buffer = try buildBufferForAddition(hunks: directive.hunks)
         try write(buffer: buffer, to: target)
         try applyFileMode(for: directive, to: target)
@@ -110,6 +118,15 @@ public struct PatchApplicator {
         }
         guard fileSystem.fileExists(at: source) else {
             throw PatchEngineError.validationFailed("cannot delete missing file: \(source)")
+        }
+
+        if let binaryPatch = directive.binaryPatch {
+            if let expectedOld = binaryPatch.oldData {
+                let currentData = try loadBinary(at: source)
+                try verifyBinaryMatch(expected: expectedOld, actual: currentData, path: source)
+            }
+            try remove(path: source)
+            return
         }
 
         var buffer = try loadBuffer(at: source)
@@ -128,6 +145,19 @@ public struct PatchApplicator {
             throw PatchEngineError.validationFailed("cannot modify missing file: \(path)")
         }
 
+        if let binaryPatch = directive.binaryPatch {
+            let currentData = try loadBinary(at: path)
+            if let expectedOld = binaryPatch.oldData {
+                try verifyBinaryMatch(expected: expectedOld, actual: currentData, path: path)
+            }
+            guard let newData = binaryPatch.newData else {
+                throw PatchEngineError.validationFailed("binary modify directive missing payload for \(path)")
+            }
+            try write(data: newData, to: path)
+            try applyFileMode(for: directive, to: path)
+            return
+        }
+
         var buffer = try loadBuffer(at: path)
         try apply(hunks: directive.hunks, to: &buffer, path: path)
         try write(buffer: buffer, to: path)
@@ -143,6 +173,18 @@ public struct PatchApplicator {
         }
         guard oldPath != newPath else {
             throw PatchEngineError.validationFailed("rename directive must target a different path")
+        }
+
+        if let binaryPatch = directive.binaryPatch {
+            let originalData = try loadBinary(at: oldPath)
+            if let expectedOld = binaryPatch.oldData {
+                try verifyBinaryMatch(expected: expectedOld, actual: originalData, path: oldPath)
+            }
+            let replacement = binaryPatch.newData ?? originalData
+            try write(data: replacement, to: newPath)
+            try remove(path: oldPath)
+            try applyFileMode(for: directive, to: newPath)
+            return
         }
 
         if directive.hunks.isEmpty {
@@ -170,6 +212,24 @@ public struct PatchApplicator {
         }
         guard !fileSystem.fileExists(at: destination) else {
             throw PatchEngineError.validationFailed("destination already exists: \(destination)")
+        }
+
+        if let binaryPatch = directive.binaryPatch {
+            let sourceData = try loadBinary(at: source)
+            if let expectedOld = binaryPatch.oldData {
+                try verifyBinaryMatch(expected: expectedOld, actual: sourceData, path: source)
+            }
+            let payload = binaryPatch.newData ?? sourceData
+            try write(data: payload, to: destination)
+            try applyFileMode(for: directive, to: destination)
+            return
+        }
+
+        if directive.metadata.isBinary {
+            let sourceData = try loadBinary(at: source)
+            try write(data: sourceData, to: destination)
+            try applyFileMode(for: directive, to: destination)
+            return
         }
 
         var buffer = try loadBuffer(at: source)
@@ -301,6 +361,22 @@ public struct PatchApplicator {
         }
     }
 
+    private func loadBinary(at path: String) throws -> Data {
+        do {
+            return try fileSystem.readFile(at: path)
+        } catch let error as PatchEngineError {
+            throw error
+        } catch {
+            throw PatchEngineError.ioFailure("failed to read \(path): \(error)")
+        }
+    }
+
+    private func verifyBinaryMatch(expected: Data, actual: Data, path: String) throws {
+        guard expected == actual else {
+            throw PatchEngineError.validationFailed("binary content mismatch while applying patch to \(path)")
+        }
+    }
+
     private func loadBuffer(at path: String) throws -> TextBuffer {
         do {
             let data = try fileSystem.readFile(at: path)
@@ -312,6 +388,14 @@ public struct PatchApplicator {
             throw error
         } catch {
             throw PatchEngineError.ioFailure("failed to read \(path): \(error)")
+        }
+    }
+
+    private func write(data: Data, to path: String) throws {
+        do {
+            try fileSystem.writeFile(data, to: path)
+        } catch {
+            throw PatchEngineError.ioFailure("failed to write \(path): \(error)")
         }
     }
 

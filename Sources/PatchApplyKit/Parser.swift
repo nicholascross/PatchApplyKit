@@ -50,6 +50,7 @@ public struct PatchParser {
                 pendingMetadataLines.removeAll()
 
                 var hunks: [PatchHunk] = []
+                var binaryBlocks: [PatchBinaryPatch.Block] = []
                 directiveLoop: while index < endIndex {
                     let nextToken = tokens[index]
                     switch nextToken {
@@ -73,6 +74,14 @@ public struct PatchParser {
                     case .metadata(let line):
                         directiveMetadataLines.append(line)
                         index += 1
+                    case .other(let line):
+                        if line == "GIT binary patch" {
+                            let result = try parseBinaryBlocks(tokens: tokens, startIndex: index + 1, endIndex: endIndex)
+                            binaryBlocks.append(contentsOf: result.blocks)
+                            index = result.nextIndex
+                        } else {
+                            index += 1
+                        }
                     case .fileOld, .header, .fileNew:
                         break directiveLoop
                     default:
@@ -81,12 +90,28 @@ public struct PatchParser {
                 }
 
                 let operation = determineOperation(oldPath: oldPath, newPath: newPath, header: directiveHeader)
-                let metadata = parseMetadata(lines: directiveMetadataLines)
+                var metadata = parseMetadata(lines: directiveMetadataLines)
+                let binaryPatch = binaryBlocks.isEmpty ? nil : PatchBinaryPatch(blocks: binaryBlocks)
+                if binaryPatch != nil && !metadata.isBinary {
+                    metadata = PatchDirectiveMetadata(
+                        index: metadata.index,
+                        fileModeChange: metadata.fileModeChange,
+                        similarityIndex: metadata.similarityIndex,
+                        dissimilarityIndex: metadata.dissimilarityIndex,
+                        renameFrom: metadata.renameFrom,
+                        renameTo: metadata.renameTo,
+                        copyFrom: metadata.copyFrom,
+                        copyTo: metadata.copyTo,
+                        isBinary: true,
+                        rawLines: metadata.rawLines
+                    )
+                }
                 let directive = PatchDirective(
                     header: directiveHeader,
                     oldPath: oldPath,
                     newPath: newPath,
                     hunks: hunks,
+                    binaryPatch: binaryPatch,
                     operation: operation,
                     metadata: metadata
                 )
@@ -252,6 +277,143 @@ public struct PatchParser {
             isBinary: isBinary,
             rawLines: lines
         )
+    }
+
+    private struct BinaryCommand {
+        let kind: PatchBinaryPatch.Block.Kind
+        let size: Int
+    }
+
+    private func parseBinaryBlocks(tokens: [PatchToken], startIndex: Int, endIndex: Int) throws -> (blocks: [PatchBinaryPatch.Block], nextIndex: Int) {
+        var index = startIndex
+        var blocks: [PatchBinaryPatch.Block] = []
+
+        while index < endIndex {
+            if case .hunkLine(let line) = tokens[index], line.isEmpty {
+                index += 1
+                continue
+            }
+
+            guard case .other(let line) = tokens[index] else {
+                break
+            }
+
+            if let command = parseBinaryCommand(from: line) {
+                let result = try parseBinaryBlock(command: command, tokens: tokens, startIndex: index + 1, endIndex: endIndex)
+                blocks.append(result.block)
+                index = result.nextIndex
+                continue
+            }
+
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                index += 1
+                continue
+            }
+
+            break
+        }
+
+        if blocks.isEmpty {
+            throw PatchEngineError.malformed("binary patch header missing literal or delta blocks")
+        }
+
+        while index < endIndex {
+            if case .hunkLine(let line) = tokens[index], line.isEmpty {
+                index += 1
+                continue
+            }
+            if case .other(let line) = tokens[index], line.trimmingCharacters(in: .whitespaces).isEmpty {
+                index += 1
+                continue
+            }
+            break
+        }
+
+        return (blocks, index)
+    }
+
+    private func parseBinaryBlock(
+        command: BinaryCommand,
+        tokens: [PatchToken],
+        startIndex: Int,
+        endIndex: Int
+    ) throws -> (block: PatchBinaryPatch.Block, nextIndex: Int) {
+        var index = startIndex
+        var dataLines: [String] = []
+
+        while index < endIndex {
+            let token = tokens[index]
+            switch token {
+            case .other(let line):
+                if let _ = parseBinaryCommand(from: line) {
+                    let block = try makeBinaryBlock(command: command, dataLines: dataLines)
+                    return (block, index)
+                }
+                if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    index += 1
+                    continue
+                }
+                dataLines.append(line)
+                index += 1
+            case .hunkLine(let line):
+                if line.isEmpty {
+                    index += 1
+                    let block = try makeBinaryBlock(command: command, dataLines: dataLines)
+                    return (block, index)
+                }
+                dataLines.append(line)
+                index += 1
+            case .metadata, .fileOld, .fileNew, .header, .hunkHeader, .beginMarker, .endMarker:
+                let block = try makeBinaryBlock(command: command, dataLines: dataLines)
+                return (block, index)
+            }
+        }
+
+        let block = try makeBinaryBlock(command: command, dataLines: dataLines)
+        return (block, index)
+    }
+
+    private func parseBinaryCommand(from line: String) -> BinaryCommand? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        let components = trimmed.split(whereSeparator: { $0.isWhitespace })
+        guard components.count == 2, let size = Int(components[1]) else { return nil }
+        let keyword = components[0].lowercased()
+        let kind: PatchBinaryPatch.Block.Kind
+        switch keyword {
+        case "literal":
+            kind = .literal
+        case "delta":
+            kind = .delta
+        default:
+            return nil
+        }
+        return BinaryCommand(kind: kind, size: size)
+    }
+
+    private func makeBinaryBlock(command: BinaryCommand, dataLines: [String]) throws -> PatchBinaryPatch.Block {
+        let data = try decodeBinaryData(lines: dataLines, expectedSize: command.size)
+        return PatchBinaryPatch.Block(kind: command.kind, expectedSize: command.size, data: data)
+    }
+
+    private func decodeBinaryData(lines: [String], expectedSize: Int) throws -> Data {
+        let sanitized = lines.joined().filter { !$0.isWhitespace }
+        if sanitized.isEmpty {
+            guard expectedSize == 0 else {
+                throw PatchEngineError.malformed("binary block declared \(expectedSize) bytes but provided no payload")
+            }
+            return Data()
+        }
+
+        guard let data = Data(base64Encoded: sanitized, options: [.ignoreUnknownCharacters]) else {
+            throw PatchEngineError.malformed("binary block payload is not valid base64")
+        }
+
+        guard data.count == expectedSize else {
+            throw PatchEngineError.malformed("binary block size mismatch: expected \(expectedSize) bytes, decoded \(data.count)")
+        }
+
+        return data
     }
 
     private func parseIndexLine(_ line: String) -> PatchIndexLine? {

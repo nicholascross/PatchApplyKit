@@ -106,6 +106,39 @@ enum PatchFixtures {
     *** End Patch
     """
 
+    static let binaryModifyPatch = """
+    *** Begin Patch
+    *** Update Binary File: Assets/icon.bin
+    Binary files a/Assets/icon.bin and b/Assets/icon.bin differ
+    --- a/Assets/icon.bin
+    +++ b/Assets/icon.bin
+    GIT binary patch
+    literal 4
+    /wCqVQ==
+
+    literal 3
+    AQID
+
+    *** End Patch
+    """
+
+    static let binaryAddPatch = """
+    *** Begin Patch
+    *** Add Binary File: Assets/icon.bin
+    new file mode 100644
+    Binary files /dev/null and b/Assets/icon.bin differ
+    --- /dev/null
+    +++ b/Assets/icon.bin
+    GIT binary patch
+    literal 4
+    /wCqVQ==
+
+    literal 0
+
+
+    *** End Patch
+    """
+
     static let addExecutablePatch = """
     *** Begin Patch
     *** Add File: script.sh
@@ -210,10 +243,14 @@ final class InMemoryFileSystem: PatchFileSystem {
 
     private var storage: [String: Entry]
 
-    init(initialFiles: [String: String] = [:]) {
-        self.storage = initialFiles.reduce(into: [:]) { result, element in
+    init(initialFiles: [String: String] = [:], initialBinaryFiles: [String: Data] = [:]) {
+        var storage = initialFiles.reduce(into: [String: Entry]()) { result, element in
             result[element.key] = Entry(data: Data(element.value.utf8), permissions: nil)
         }
+        for (path, data) in initialBinaryFiles {
+            storage[path] = Entry(data: data, permissions: storage[path]?.permissions)
+        }
+        self.storage = storage
     }
 
     func fileExists(at path: String) -> Bool {
@@ -253,6 +290,10 @@ final class InMemoryFileSystem: PatchFileSystem {
 
     func string(at path: String) -> String? {
         storage[path].flatMap { String(data: $0.data, encoding: .utf8) }
+    }
+
+    func data(at path: String) -> Data? {
+        storage[path]?.data
     }
 
     func permissions(at path: String) -> UInt16? {

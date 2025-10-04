@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 @testable import PatchApplyKit
 
 final class TokenizerParserTests: XCTestCase {
@@ -73,6 +74,20 @@ final class TokenizerParserTests: XCTestCase {
         let tokens = try tokenizer.tokenize(PatchFixtures.binaryCopyPatch)
         let plan = try parser.parse(tokens: tokens)
         let directive = try XCTUnwrap(plan.directives.first)
+        XCTAssertTrue(directive.metadata.isBinary)
+        XCTAssertTrue(directive.hunks.isEmpty)
+    }
+
+    func testParserCapturesBinaryPatchBlocks() throws {
+        let tokens = try tokenizer.tokenize(PatchFixtures.binaryModifyPatch)
+        let plan = try parser.parse(tokens: tokens)
+        let directive = try XCTUnwrap(plan.directives.first)
+        let binary = try XCTUnwrap(directive.binaryPatch)
+        XCTAssertEqual(binary.blocks.count, 2)
+        XCTAssertEqual(binary.newBlock?.expectedSize, 4)
+        XCTAssertEqual(binary.oldBlock?.expectedSize, 3)
+        XCTAssertEqual(binary.newData, Data([0xFF, 0x00, 0xAA, 0x55]))
+        XCTAssertEqual(binary.oldData, Data([0x01, 0x02, 0x03]))
         XCTAssertTrue(directive.metadata.isBinary)
         XCTAssertTrue(directive.hunks.isEmpty)
     }

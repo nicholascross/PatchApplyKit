@@ -1,5 +1,5 @@
 import Foundation
-@testable import MinimalPatchApply
+@testable import PatchApplyKit
 
 enum PatchFixtures {
     static let updateHello = """

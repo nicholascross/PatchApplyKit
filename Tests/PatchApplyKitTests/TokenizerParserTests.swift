@@ -1,5 +1,5 @@
 import XCTest
-@testable import MinimalPatchApply
+@testable import PatchApplyKit
 
 final class TokenizerParserTests: XCTestCase {
     private let tokenizer = PatchTokenizer()

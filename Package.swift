@@ -4,21 +4,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "MinimalPatchApply",
+    name: "PatchApplyKit",
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
-            name: "MinimalPatchApply",
-            targets: ["MinimalPatchApply"]),
+            name: "PatchApplyKit",
+            targets: ["PatchApplyKit"]),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
-            name: "MinimalPatchApply"),
+            name: "PatchApplyKit"),
         .testTarget(
-            name: "MinimalPatchApplyTests",
-            dependencies: ["MinimalPatchApply"]
+            name: "PatchApplyKitTests",
+            dependencies: ["PatchApplyKit"]
         ),
     ]
 )

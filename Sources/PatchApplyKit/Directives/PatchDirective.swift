@@ -6,7 +6,6 @@ public struct PatchDirective: Equatable {
     public let oldPath: String?
     public let newPath: String?
     public let hunks: [PatchHunk]
-    public let binaryPatch: PatchBinaryPatch?
     public let operation: PatchOperation
     public let metadata: PatchDirectiveMetadata
 
@@ -15,7 +14,6 @@ public struct PatchDirective: Equatable {
         oldPath: String?,
         newPath: String?,
         hunks: [PatchHunk],
-        binaryPatch: PatchBinaryPatch? = nil,
         operation: PatchOperation,
         metadata: PatchDirectiveMetadata = PatchDirectiveMetadata()
     ) {
@@ -23,7 +21,6 @@ public struct PatchDirective: Equatable {
         self.oldPath = oldPath
         self.newPath = newPath
         self.hunks = hunks
-        self.binaryPatch = binaryPatch
         self.operation = operation
         self.metadata = metadata
     }

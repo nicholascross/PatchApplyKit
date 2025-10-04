@@ -10,7 +10,6 @@ public struct PatchDirectiveMetadata: Equatable {
     public let renameTo: String?
     public let copyFrom: String?
     public let copyTo: String?
-    public let isBinary: Bool
     public let rawLines: [String]
 
     public init(
@@ -22,7 +21,6 @@ public struct PatchDirectiveMetadata: Equatable {
         renameTo: String? = nil,
         copyFrom: String? = nil,
         copyTo: String? = nil,
-        isBinary: Bool = false,
         rawLines: [String] = []
     ) {
         self.index = index
@@ -33,7 +31,6 @@ public struct PatchDirectiveMetadata: Equatable {
         self.renameTo = renameTo
         self.copyFrom = copyFrom
         self.copyTo = copyTo
-        self.isBinary = isBinary
         self.rawLines = rawLines
     }
 }

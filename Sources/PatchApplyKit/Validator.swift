@@ -32,7 +32,7 @@ public struct PatchValidator {
                 throw PatchEngineError.validationFailed("duplicate new-path directive for \(newPath)")
             }
             newPathOwners[newPath] = .add
-            guard !directive.hunks.isEmpty || directive.binaryPatch != nil else {
+            guard !directive.hunks.isEmpty else {
                 throw PatchEngineError.validationFailed("add directive for \(newPath) is missing content")
             }
         case .delete:
@@ -45,7 +45,7 @@ public struct PatchValidator {
             guard seenOldPaths.insert(oldPath).inserted else {
                 throw PatchEngineError.validationFailed("duplicate delete directive for \(oldPath)")
             }
-            guard !directive.hunks.isEmpty || directive.binaryPatch != nil else {
+            guard !directive.hunks.isEmpty else {
                 throw PatchEngineError.validationFailed("delete directive for \(oldPath) is missing content markers")
             }
         case .modify:
@@ -56,7 +56,7 @@ public struct PatchValidator {
                 throw PatchEngineError.validationFailed("duplicate modify directive for \(oldPath)")
             }
             try trackNewPath(newPath, for: directive.operation, owners: &newPathOwners)
-            guard !directive.hunks.isEmpty || directive.binaryPatch != nil else {
+            guard !directive.hunks.isEmpty else {
                 throw PatchEngineError.validationFailed("modify directive for \(oldPath) is missing content changes")
             }
         case .rename:
@@ -191,10 +191,6 @@ public struct PatchValidator {
     private func validateMetadata(for directive: PatchDirective) throws {
         let metadata = directive.metadata
 
-        if let binaryPatch = directive.binaryPatch {
-            try validateBinaryPayload(binaryPatch, for: directive)
-        }
-
         if metadata.renameFrom != nil, directive.operation != .rename {
             throw PatchEngineError.validationFailed("unexpected rename metadata for non-rename directive touching \(directive.oldPath ?? directive.newPath ?? "<unknown>")")
         }
@@ -240,12 +236,6 @@ public struct PatchValidator {
             }
         }
 
-        if metadata.isBinary || directive.binaryPatch != nil {
-            guard directive.hunks.isEmpty else {
-                throw PatchEngineError.validationFailed("binary patches must not include textual hunks")
-            }
-        }
-
         if let fileMode = metadata.fileModeChange {
             switch directive.operation {
             case .add:
@@ -259,20 +249,6 @@ public struct PatchValidator {
             default:
                 break
             }
-        }
-    }
-
-    private func validateBinaryPayload(_ binaryPatch: PatchBinaryPatch, for directive: PatchDirective) throws {
-        guard let targetPath = directive.newPath ?? directive.oldPath else {
-            throw PatchEngineError.validationFailed("binary directive missing path context")
-        }
-
-        guard let newBlock = binaryPatch.newBlock else {
-            throw PatchEngineError.validationFailed("binary directive for \(targetPath) is missing a new binary payload")
-        }
-
-        if directive.operation == .delete, !newBlock.data.isEmpty {
-            throw PatchEngineError.validationFailed("delete directive for \(targetPath) must not supply new binary data")
         }
     }
 

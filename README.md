@@ -1,13 +1,14 @@
 # PatchApplyKit
 
-PatchApplyKit is a Swift library for parsing, validating, and applying Git-style unified diff patches wrapped by `*** Begin Patch` / `*** End Patch` sentinels. It handles multi-file changes, binary payloads, file mode updates, and protective validation before touching the file system.
+PatchApplyKit is a Swift library for parsing, validating, and applying Git-style unified diff patches wrapped by `*** Begin Patch` / `*** End Patch` sentinels. It handles multi-file changes, file mode updates, and protective validation before touching the file system.
 
 ## Features
 
 - High-level `PatchApplier` façade that runs tokenization → parsing → validation → application.
 - Support for add, delete, modify, rename, and copy directives in a single patch stream.
 - Optional `SandboxedFileSystem` to constrain writes to a specific directory.
-- Binary patch support (Git literal/delta blocks) and POSIX permission updates.
+- Text-based patching with POSIX permission updates.
+- Explicit rejection of binary diffs (`Binary files ...` / `GIT binary patch`).
 - Configurable whitespace handling and fuzzy context tolerance for resilient patching.
 
 ## Installation
@@ -131,32 +132,13 @@ With `whitespace: .ignoreAll`, minor formatting differences in context lines no 
 
 The unified-diff format includes context lines around each hunk so the patch engine can anchor additions and deletions to the right location. PatchApplyKit normally requires those context lines to match exactly; otherwise, the patch is rejected to avoid corrupting the target file. Setting `contextTolerance` to a positive integer lets the validator forgive a limited number of mismatched context lines per hunk. When a mismatch is detected, the applicator scans outward—up to the tolerance you provided—trying to find a nearby match before giving up. This is useful when the surrounding code has drifted slightly (for example, due to unrelated formatting or wording changes) but the overall structure is still recognizable. Keep the value small so patches do not land far from their intended anchor; a tolerance between 1 and 3 typically balances resilience with safety.
 
-## Binary Payloads and File Modes
-
-Binary diffs that include `GIT binary patch` blocks are parsed automatically:
-
-```swift
-let binaryPatch = """
-*** Begin Patch
-*** Update Binary File: Assets/icon.bin
-Binary files a/Assets/icon.bin and b/Assets/icon.bin differ
---- a/Assets/icon.bin
-+++ b/Assets/icon.bin
-GIT binary patch
-literal 4
-/wCqVQ==
-
-literal 3
-AQID
-
-*** End Patch
-"""
-
-let applier = PatchApplier()
-try applier.apply(text: binaryPatch)
-```
+## File Modes
 
 If the patch describes new POSIX permissions (e.g. `new file mode 100755`), PatchApplyKit applies them after writing the file.
+
+## Limitations
+
+PatchApplyKit intentionally focuses on text-based unified diffs. Patches that declare binary content—such as lines beginning with `Binary files` or sections headed by `GIT binary patch`—are rejected with `PatchEngineError.validationFailed("binary patches are not supported")` to prevent unintended binary writes.
 
 ## Error Handling
 

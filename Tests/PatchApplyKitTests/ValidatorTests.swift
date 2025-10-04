@@ -67,23 +67,6 @@ final class ValidatorTests: XCTestCase {
         XCTAssertThrowsError(try validator.validate(plan))
     }
 
-    func testValidatorRejectsBinaryPatchWithHunks() {
-        let metadata = PatchDirectiveMetadata(isBinary: true, rawLines: ["Binary files a/foo and b/foo differ"])
-        let hunk = PatchHunk(
-            header: PatchHunkHeader(oldRange: PatchLineRange(start: 1, length: 1), newRange: PatchLineRange(start: 1, length: 1), sectionHeading: nil),
-            lines: [.context("data")]
-        )
-        let directive = PatchDirective(
-            oldPath: "foo",
-            newPath: "foo",
-            hunks: [hunk],
-            operation: .modify,
-            metadata: metadata
-        )
-        let plan = PatchPlan(metadata: PatchMetadata(), directives: [directive])
-        XCTAssertThrowsError(try validator.validate(plan))
-    }
-
     func testValidatorAcceptsComplexPlanWithMixedDirectives() throws {
         let tokenizer = PatchTokenizer()
         let parser = PatchParser()
@@ -145,24 +128,6 @@ final class ValidatorTests: XCTestCase {
                 return XCTFail("Unexpected error type: \(error)")
             }
             XCTAssertTrue(message.contains("similarity metadata"))
-        }
-    }
-
-    func testValidatorRejectsBinaryDeletePayload() {
-        let block = PatchBinaryPatch.Block(kind: .literal, expectedSize: 1, data: Data([0x01]))
-        let directive = PatchDirective(
-            oldPath: "file.bin",
-            newPath: nil,
-            hunks: [],
-            binaryPatch: PatchBinaryPatch(blocks: [block]),
-            operation: .delete
-        )
-        let plan = PatchPlan(metadata: PatchMetadata(), directives: [directive])
-        XCTAssertThrowsError(try validator.validate(plan)) { error in
-            guard case let PatchEngineError.validationFailed(message) = error else {
-                return XCTFail("Unexpected error type: \(error)")
-            }
-            XCTAssertTrue(message.contains("must not supply new binary data"))
         }
     }
 

@@ -62,40 +62,26 @@ final class ApplicatorTests: XCTestCase {
         XCTAssertEqual(fs.string(at: "script.sh"), "echo hello\n")
     }
 
-    func testApplierAddsBinaryFile() throws {
-        let fs = InMemoryFileSystem()
+    func testApplierRejectsBinaryPatch() throws {
+        let fs = InMemoryFileSystem(initialFiles: ["Assets/icon.bin": "placeholder\n"])
         let applier = PatchApplier(fileSystem: fs)
-        try applier.apply(text: PatchFixtures.binaryAddPatch)
-        XCTAssertEqual(fs.data(at: "Assets/icon.bin"), Data([0xFF, 0x00, 0xAA, 0x55]))
-        XCTAssertEqual(fs.permissions(at: "Assets/icon.bin"), UInt16(0o0644))
-    }
-
-    func testApplierModifiesBinaryFile() throws {
-        let original = Data([0x01, 0x02, 0x03])
-        let fs = InMemoryFileSystem(initialBinaryFiles: ["Assets/icon.bin": original])
-        let applier = PatchApplier(fileSystem: fs)
-        try applier.apply(text: PatchFixtures.binaryModifyPatch)
-        XCTAssertEqual(fs.data(at: "Assets/icon.bin"), Data([0xFF, 0x00, 0xAA, 0x55]))
-    }
-
-    func testApplierRejectsBinaryMismatch() throws {
-        let fs = InMemoryFileSystem(initialBinaryFiles: ["Assets/icon.bin": Data([0x10, 0x20, 0x30])])
-        let applier = PatchApplier(fileSystem: fs)
-        XCTAssertThrowsError(try applier.apply(text: PatchFixtures.binaryModifyPatch)) { error in
+        XCTAssertThrowsError(try applier.apply(text: PatchFixtures.unsupportedBinaryModifyPatch)) { error in
             guard case let PatchEngineError.validationFailed(message) = error else {
                 return XCTFail("Unexpected error type: \(error)")
             }
-            XCTAssertTrue(message.contains("binary content mismatch"))
+            XCTAssertTrue(message.contains("binary patches are not supported"), "Unexpected error message: \(message)")
         }
     }
 
-    func testApplierCopiesBinaryFileWithoutPayload() throws {
-        let payload = Data([0xCA, 0xFE, 0xBA, 0xBE])
-        let fs = InMemoryFileSystem(initialBinaryFiles: ["image.png": payload])
+    func testApplierRejectsBinaryMetadataOnlyPatch() throws {
+        let fs = InMemoryFileSystem(initialFiles: ["image.png": "placeholder\n"])
         let applier = PatchApplier(fileSystem: fs)
-        try applier.apply(text: PatchFixtures.binaryCopyPatch)
-        XCTAssertEqual(fs.data(at: "image.png"), payload)
-        XCTAssertEqual(fs.data(at: "image-copy.png"), payload)
+        XCTAssertThrowsError(try applier.apply(text: PatchFixtures.unsupportedBinaryCopyPatch)) { error in
+            guard case let PatchEngineError.validationFailed(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("binary patches are not supported"), "Unexpected error message: \(message)")
+        }
     }
 
     func testApplierHonorsWhitespaceTolerance() throws {

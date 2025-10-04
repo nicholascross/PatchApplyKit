@@ -97,48 +97,6 @@ enum PatchFixtures {
     *** End Patch
     """
 
-    static let binaryCopyPatch = """
-    *** Begin Patch
-    *** Copy Binary File: image.png -> image-copy.png
-    Binary files a/image.png and b/image-copy.png differ
-    --- a/image.png
-    +++ b/image-copy.png
-    *** End Patch
-    """
-
-    static let binaryModifyPatch = """
-    *** Begin Patch
-    *** Update Binary File: Assets/icon.bin
-    Binary files a/Assets/icon.bin and b/Assets/icon.bin differ
-    --- a/Assets/icon.bin
-    +++ b/Assets/icon.bin
-    GIT binary patch
-    literal 4
-    /wCqVQ==
-
-    literal 3
-    AQID
-
-    *** End Patch
-    """
-
-    static let binaryAddPatch = """
-    *** Begin Patch
-    *** Add Binary File: Assets/icon.bin
-    new file mode 100644
-    Binary files /dev/null and b/Assets/icon.bin differ
-    --- /dev/null
-    +++ b/Assets/icon.bin
-    GIT binary patch
-    literal 4
-    /wCqVQ==
-
-    literal 0
-
-
-    *** End Patch
-    """
-
     static let addExecutablePatch = """
     *** Begin Patch
     *** Add File: script.sh
@@ -181,6 +139,31 @@ enum PatchFixtures {
     +++ b/../escape.txt
     @@ -0,0 +1 @@
     +intruder
+    *** End Patch
+    """
+
+    static let unsupportedBinaryCopyPatch = """
+    *** Begin Patch
+    *** Copy Binary File: image.png -> image-copy.png
+    Binary files a/image.png and b/image-copy.png differ
+    --- a/image.png
+    +++ b/image-copy.png
+    *** End Patch
+    """
+
+    static let unsupportedBinaryModifyPatch = """
+    *** Begin Patch
+    *** Update Binary File: Assets/icon.bin
+    Binary files a/Assets/icon.bin and b/Assets/icon.bin differ
+    --- a/Assets/icon.bin
+    +++ b/Assets/icon.bin
+    GIT binary patch
+    literal 4
+    /wCqVQ==
+
+    literal 3
+    AQID
+
     *** End Patch
     """
 
@@ -264,47 +247,6 @@ enum PatchFixtures {
     +beta-modified
     +beta
     +beta-modified
-    *** End Patch
-    """
-
-    static let binaryDeltaPatch = """
-    *** Begin Patch
-    *** Update Binary File: Assets/pattern.bin
-    Binary files a/Assets/pattern.bin and b/Assets/pattern.bin differ
-    --- a/Assets/pattern.bin
-    +++ b/Assets/pattern.bin
-    GIT binary patch
-    delta 3
-    AAEC
-
-    literal 3
-    AQID
-
-    *** End Patch
-    """
-
-    static let binaryMissingPayloadPatch = """
-    *** Begin Patch
-    *** Update Binary File: Assets/pattern.bin
-    Binary files a/Assets/pattern.bin and b/Assets/pattern.bin differ
-    --- a/Assets/pattern.bin
-    +++ b/Assets/pattern.bin
-    GIT binary patch
-    literal 3
-
-    *** End Patch
-    """
-
-    static let binaryMalformedPatch = """
-    *** Begin Patch
-    *** Update Binary File: Assets/pattern.bin
-    Binary files a/Assets/pattern.bin and b/Assets/pattern.bin differ
-    --- a/Assets/pattern.bin
-    +++ b/Assets/pattern.bin
-    GIT binary patch
-    literal 3
-    abc
-
     *** End Patch
     """
 

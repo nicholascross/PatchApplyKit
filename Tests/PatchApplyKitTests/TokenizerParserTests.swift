@@ -70,28 +70,6 @@ final class TokenizerParserTests: XCTestCase {
         XCTAssertNil(metadata.dissimilarityIndex)
     }
 
-    func testParserMarksBinaryMetadata() throws {
-        let tokens = try tokenizer.tokenize(PatchFixtures.binaryCopyPatch)
-        let plan = try parser.parse(tokens: tokens)
-        let directive = try XCTUnwrap(plan.directives.first)
-        XCTAssertTrue(directive.metadata.isBinary)
-        XCTAssertTrue(directive.hunks.isEmpty)
-    }
-
-    func testParserCapturesBinaryPatchBlocks() throws {
-        let tokens = try tokenizer.tokenize(PatchFixtures.binaryModifyPatch)
-        let plan = try parser.parse(tokens: tokens)
-        let directive = try XCTUnwrap(plan.directives.first)
-        let binary = try XCTUnwrap(directive.binaryPatch)
-        XCTAssertEqual(binary.blocks.count, 2)
-        XCTAssertEqual(binary.newBlock?.expectedSize, 4)
-        XCTAssertEqual(binary.oldBlock?.expectedSize, 3)
-        XCTAssertEqual(binary.newData, Data([0xFF, 0x00, 0xAA, 0x55]))
-        XCTAssertEqual(binary.oldData, Data([0x01, 0x02, 0x03]))
-        XCTAssertTrue(directive.metadata.isBinary)
-        XCTAssertTrue(directive.hunks.isEmpty)
-    }
-
     func testParserHandlesComplexPatchWithMultipleDirectives() throws {
         let tokens = try tokenizer.tokenize(PatchFixtures.complexFeaturePatch)
         let plan = try parser.parse(tokens: tokens)
@@ -123,33 +101,23 @@ final class TokenizerParserTests: XCTestCase {
         XCTAssertEqual(rename.hunks.count, 1)
     }
 
-    func testParserCapturesBinaryDeltaBlocks() throws {
-        let tokens = try tokenizer.tokenize(PatchFixtures.binaryDeltaPatch)
-        let plan = try parser.parse(tokens: tokens)
-        let directive = try XCTUnwrap(plan.directives.first)
-        let binary = try XCTUnwrap(directive.binaryPatch)
-        XCTAssertEqual(binary.blocks.map { $0.kind }, [.delta, .literal])
-        XCTAssertEqual(binary.newBlock?.data, Data([0x00, 0x01, 0x02]))
-        XCTAssertEqual(binary.oldBlock?.data, Data([0x01, 0x02, 0x03]))
-    }
-
-    func testParserRejectsBinaryPatchWithMissingPayload() throws {
-        let tokens = try tokenizer.tokenize(PatchFixtures.binaryMissingPayloadPatch)
+    func testParserRejectsBinaryMetadata() throws {
+        let tokens = try tokenizer.tokenize(PatchFixtures.unsupportedBinaryCopyPatch)
         XCTAssertThrowsError(try parser.parse(tokens: tokens)) { error in
-            guard case let PatchEngineError.malformed(message) = error else {
+            guard case let PatchEngineError.validationFailed(message) = error else {
                 return XCTFail("Unexpected error type: \(error)")
             }
-            XCTAssertTrue(message.contains("binary block"), "Unexpected error message: \(message)")
+            XCTAssertTrue(message.contains("binary patches are not supported"), "Unexpected error message: \(message)")
         }
     }
 
-    func testParserRejectsBinaryPatchWithInvalidBase64() throws {
-        let tokens = try tokenizer.tokenize(PatchFixtures.binaryMalformedPatch)
+    func testParserRejectsBinaryPatchBlocks() throws {
+        let tokens = try tokenizer.tokenize(PatchFixtures.unsupportedBinaryModifyPatch)
         XCTAssertThrowsError(try parser.parse(tokens: tokens)) { error in
-            guard case let PatchEngineError.malformed(message) = error else {
+            guard case let PatchEngineError.validationFailed(message) = error else {
                 return XCTFail("Unexpected error type: \(error)")
             }
-            XCTAssertTrue(message.contains("base64"), "Unexpected error message: \(message)")
+            XCTAssertTrue(message.contains("binary patches are not supported"), "Unexpected error message: \(message)")
         }
     }
 }

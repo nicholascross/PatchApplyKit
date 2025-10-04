@@ -161,6 +161,29 @@ enum PatchFixtures {
     *** End Patch
     """
 
+    static let fuzzyContextPatch = """
+    *** Begin Patch
+    *** Update File: doc.txt
+    --- a/doc.txt
+    +++ b/doc.txt
+    @@ -2,3 +2,3 @@
+     line2
+    -line3
+    +line 3 updated
+     line4
+    *** End Patch
+    """
+
+    static let sandboxEscapePatch = """
+    *** Begin Patch
+    *** Add File: ../escape.txt
+    --- /dev/null
+    +++ b/../escape.txt
+    @@ -0,0 +1 @@
+    +intruder
+    *** End Patch
+    """
+
     static let complexFeaturePatch = #"""
     *** Begin Patch
     *** Update File: Sources/App/FeatureService.swift

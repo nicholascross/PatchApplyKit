@@ -1,16 +1,10 @@
 # TODO
 
-## Binary patch support
-- Parse git binary patch sections (`literal` / `delta` blocks) and apply them to targets using base64 decoding.
-- Add fallback strategy (e.g. copy source file verbatim) when binary data is unavailable but metadata indicates rename/copy.
-- Extend `PatchFileSystem` with streaming write APIs for large binary payloads; update applicator accordingly.
-
 ## Mode and permission enhancements
 - Capture and apply `index ...` optional mode tokens for existing files when no content change occurs.
 - Support Windows-style attributes or ACL metadata (future cross-platform consideration).
 
 ## Matching robustness
-- Implement configurable fuzzy matching (e.g. context tolerance) similar to GNU `patch` fuzz factor.
 - Add out-of-order hunk application guard rails and reporting when context shifts but still matches.
 
 ## Validation and diagnostics

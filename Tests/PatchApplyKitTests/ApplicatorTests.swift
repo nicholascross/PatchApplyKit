@@ -112,6 +112,80 @@ final class ApplicatorTests: XCTestCase {
         XCTAssertEqual(tolerantFS.string(at: "code.swift"), "foo = 2\n")
     }
 
+    func testApplierUsesContextTolerance() throws {
+        let original = [
+            "line1",
+            "line two changed",
+            "line3",
+            "line four changed",
+            "line5"
+        ].joined(separator: "\n") + "\n"
+
+        let strictFS = InMemoryFileSystem(initialFiles: ["doc.txt": original])
+        let strictApplier = PatchApplier(fileSystem: strictFS)
+        XCTAssertThrowsError(try strictApplier.apply(text: PatchFixtures.fuzzyContextPatch))
+
+        let partialFS = InMemoryFileSystem(initialFiles: ["doc.txt": original])
+        let partialApplier = PatchApplier(
+            fileSystem: partialFS,
+            configuration: .init(contextTolerance: 1)
+        )
+        XCTAssertThrowsError(try partialApplier.apply(text: PatchFixtures.fuzzyContextPatch))
+
+        let fuzzyFS = InMemoryFileSystem(initialFiles: ["doc.txt": original])
+        let fuzzyApplier = PatchApplier(
+            fileSystem: fuzzyFS,
+            configuration: .init(contextTolerance: 2)
+        )
+        try fuzzyApplier.apply(text: PatchFixtures.fuzzyContextPatch)
+
+        let expected = [
+            "line1",
+            "line two changed",
+            "line 3 updated",
+            "line four changed",
+            "line5"
+        ].joined(separator: "\n") + "\n"
+        XCTAssertEqual(fuzzyFS.string(at: "doc.txt"), expected)
+    }
+
+    func testSandboxedFileSystemWritesWithinRoot() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("sandbox")
+        defer { try? fm.removeItem(at: base) }
+
+        let sandboxedFS = SandboxedFileSystem(rootPath: root.path)
+        let applier = PatchApplier(fileSystem: sandboxedFS)
+
+        try applier.apply(text: PatchFixtures.addGreet)
+
+        let outputURL = root.appendingPathComponent("greet.txt")
+        let contents = try String(contentsOf: outputURL, encoding: .utf8)
+        XCTAssertEqual(contents, "Hello\nWorld\n")
+    }
+
+    func testSandboxedFileSystemPreventsPathTraversal() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("sandbox")
+        let outside = base.appendingPathComponent("escape.txt")
+        try? fm.removeItem(at: outside)
+        defer { try? fm.removeItem(at: base) }
+
+        let sandboxedFS = SandboxedFileSystem(rootPath: root.path)
+        let applier = PatchApplier(fileSystem: sandboxedFS)
+
+        XCTAssertThrowsError(try applier.apply(text: PatchFixtures.sandboxEscapePatch)) { error in
+            guard case let PatchEngineError.ioFailure(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("outside the sandbox"), "Unexpected error message: \(message)")
+        }
+
+        XCTAssertFalse(fm.fileExists(atPath: outside.path))
+    }
+
     func testApplierHandlesComplexMultiDirectivePatch() throws {
         let originalFeatureLines = [
             "import Foundation",

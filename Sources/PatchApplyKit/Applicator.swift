@@ -52,6 +52,93 @@ public struct LocalFileSystem: PatchFileSystem {
     }
 }
 
+/// Wraps another file system and confines all operations to a specified root directory.
+public struct SandboxedFileSystem: PatchFileSystem {
+    private let base: PatchFileSystem
+    private let root: URL
+    private let rootPathPrefix: String
+
+    public init(rootPath: String, base: PatchFileSystem = LocalFileSystem()) {
+        let rootURL = URL(fileURLWithPath: rootPath, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        self.root = rootURL
+        let normalizedRootPath = rootURL.path
+        if normalizedRootPath.hasSuffix("/") {
+            self.rootPathPrefix = normalizedRootPath
+        } else {
+            self.rootPathPrefix = normalizedRootPath + "/"
+        }
+        self.base = base
+    }
+
+    public func fileExists(at path: String) -> Bool {
+        guard let resolved = try? resolve(path) else {
+            return false
+        }
+        return base.fileExists(at: resolved.path)
+    }
+
+    public func readFile(at path: String) throws -> Data {
+        let resolved = try resolve(path)
+        return try base.readFile(at: resolved.path)
+    }
+
+    public func writeFile(_ data: Data, to path: String) throws {
+        let resolved = try resolve(path)
+        try base.writeFile(data, to: resolved.path)
+    }
+
+    public func removeItem(at path: String) throws {
+        let resolved = try resolve(path)
+        try base.removeItem(at: resolved.path)
+    }
+
+    public func moveItem(from source: String, to destination: String) throws {
+        let resolvedSource = try resolve(source)
+        let resolvedDestination = try resolve(destination)
+        try base.moveItem(from: resolvedSource.path, to: resolvedDestination.path)
+    }
+
+    public func setPOSIXPermissions(_ permissions: UInt16, at path: String) throws {
+        let resolved = try resolve(path)
+        try base.setPOSIXPermissions(permissions, at: resolved.path)
+    }
+
+    private func resolve(_ path: String) throws -> URL {
+        let candidate: URL
+        if path.hasPrefix("/") {
+            candidate = URL(fileURLWithPath: path)
+        } else {
+            candidate = root.appendingPathComponent(path)
+        }
+        let normalized = candidate.standardizedFileURL.resolvingSymlinksInPath()
+        guard contains(normalized) else {
+            throw SandboxError.pathOutsideSandbox(requested: path, resolved: normalized.path)
+        }
+        return normalized
+    }
+
+    private func contains(_ url: URL) -> Bool {
+        let path = url.path
+        if path == root.path {
+            return true
+        }
+        return path.hasPrefix(rootPathPrefix)
+    }
+
+    public enum SandboxError: Error, CustomStringConvertible {
+        case pathOutsideSandbox(requested: String, resolved: String)
+
+        public var description: String {
+            switch self {
+            case let .pathOutsideSandbox(requested, resolved):
+                return "path \(requested) resolves to \(resolved) which is outside the sandbox"
+            }
+        }
+    }
+}
+
 /// Applies a validated patch plan to the provided file system.
 public struct PatchApplicator {
     private let fileSystem: PatchFileSystem
@@ -64,9 +151,14 @@ public struct PatchApplicator {
         }
 
         public let whitespace: WhitespaceMode
+        public let contextTolerance: Int
 
-        public init(whitespace: WhitespaceMode = .exact) {
+        public init(
+            whitespace: WhitespaceMode = .exact,
+            contextTolerance: Int = 0
+        ) {
             self.whitespace = whitespace
+            self.contextTolerance = max(0, contextTolerance)
         }
     }
 
@@ -269,75 +361,91 @@ public struct PatchApplicator {
     private func apply(hunks: [PatchHunk], to buffer: inout TextBuffer, path: String) throws {
         for hunk in hunks {
             let transform = try HunkTransform(hunk: hunk)
-            let insertionIndex = try locateMatch(
-                expected: transform.expected,
+            let match = try locateMatch(
+                transform: transform,
                 in: buffer,
                 header: hunk.header,
                 path: path
             )
+            let variant = match.variant
+            let insertionIndex = match.insertionIndex
 
-            let matchTouchesEnd = insertionIndex + transform.expected.count == buffer.lines.count
-            if matchTouchesEnd, let expectedFlag = transform.expectedTrailingNewline {
+            let matchTouchesEnd = insertionIndex + variant.expected.count == buffer.lines.count
+            if matchTouchesEnd, let expectedFlag = variant.expectedTrailingNewline {
                 guard buffer.hasTrailingNewline == expectedFlag else {
                     throw PatchEngineError.validationFailed("newline expectation mismatch while applying hunk to \(path)")
                 }
             }
 
-            if transform.expected.count > 0 {
-                buffer.lines.removeSubrange(insertionIndex..<(insertionIndex + transform.expected.count))
+            if variant.expected.count > 0 {
+                buffer.lines.removeSubrange(insertionIndex..<(insertionIndex + variant.expected.count))
             }
-            if !transform.replacement.isEmpty {
-                buffer.lines.insert(contentsOf: transform.replacement, at: insertionIndex)
+            if !variant.replacement.isEmpty {
+                buffer.lines.insert(contentsOf: variant.replacement, at: insertionIndex)
             }
 
-            let replacementTouchesEnd = insertionIndex + transform.replacement.count == buffer.lines.count
+            let replacementTouchesEnd = insertionIndex + variant.replacement.count == buffer.lines.count
             if replacementTouchesEnd {
-                if let replacementFlag = transform.replacementTrailingNewline {
+                if let replacementFlag = variant.replacementTrailingNewline {
                     buffer.hasTrailingNewline = replacementFlag
-                } else if transform.expectedTrailingNewline != nil {
+                } else if variant.expectedTrailingNewline != nil {
                     buffer.hasTrailingNewline = true
                 }
             }
         }
     }
 
+    private struct HunkMatch {
+        let insertionIndex: Int
+        let variant: HunkTransform.Variant
+    }
+
     private func locateMatch(
-        expected: [String],
+        transform: HunkTransform,
         in buffer: TextBuffer,
         header: PatchHunkHeader,
         path: String
-    ) throws -> Int {
-        if expected.isEmpty {
-            if let newRange = header.newRange {
-                let index = max(0, min(buffer.lines.count, newRange.start - 1))
-                return index
-            }
-            return buffer.lines.count
-        }
+    ) throws -> HunkMatch {
+        let variants = transform.variants(contextTolerance: configuration.contextTolerance)
 
-        if let oldRange = header.oldRange {
-            let candidate = max(0, min(buffer.lines.count, oldRange.start - 1))
-            if matches(expected, in: buffer, at: candidate) {
-                return candidate
+        for variant in variants {
+            if variant.expected.isEmpty {
+                let insertion: Int
+                if let newRange = header.newRange {
+                    insertion = max(0, min(buffer.lines.count, newRange.start - 1))
+                } else {
+                    insertion = buffer.lines.count
+                }
+                return HunkMatch(insertionIndex: insertion, variant: variant)
             }
-        }
 
-        var matchesFound: [Int] = []
-        if buffer.lines.count >= expected.count {
-            for start in 0...(buffer.lines.count - expected.count) {
-                if matches(expected, in: buffer, at: start) {
-                    matchesFound.append(start)
+            if let oldRange = header.oldRange {
+                let maxCandidate = buffer.lines.count - variant.expected.count
+                if maxCandidate >= 0 {
+                    let candidate = max(0, min(maxCandidate, oldRange.start - 1))
+                    if matches(variant.expected, in: buffer, at: candidate) {
+                        return HunkMatch(insertionIndex: candidate, variant: variant)
+                    }
                 }
             }
+
+            var matchesFound: [Int] = []
+            if buffer.lines.count >= variant.expected.count {
+                for start in 0...(buffer.lines.count - variant.expected.count) {
+                    if matches(variant.expected, in: buffer, at: start) {
+                        matchesFound.append(start)
+                    }
+                }
+            }
+
+            if matchesFound.count > 1 {
+                throw PatchEngineError.validationFailed("ambiguous hunk match while applying patch to \(path)")
+            } else if let match = matchesFound.first {
+                return HunkMatch(insertionIndex: match, variant: variant)
+            }
         }
 
-        if matchesFound.isEmpty {
-            throw PatchEngineError.validationFailed("context mismatch while applying hunk to \(path)")
-        }
-        guard matchesFound.count == 1 else {
-            throw PatchEngineError.validationFailed("ambiguous hunk match while applying patch to \(path)")
-        }
-        return matchesFound[0]
+        throw PatchEngineError.validationFailed("context mismatch while applying hunk to \(path)")
     }
 
     private func matches(_ expected: [String], in buffer: TextBuffer, at index: Int) -> Bool {
@@ -485,14 +593,37 @@ private struct TextBuffer {
 }
 
 private struct HunkTransform {
-    let expected: [String]
-    let replacement: [String]
-    let expectedTrailingNewline: Bool?
-    let replacementTrailingNewline: Bool?
+    enum ExpectedKind: Equatable {
+        case context
+        case deletion
+    }
+
+    enum ReplacementKind: Equatable {
+        case context
+        case addition
+    }
+
+    struct Variant {
+        let expected: [String]
+        let replacement: [String]
+        let expectedTrailingNewline: Bool?
+        let replacementTrailingNewline: Bool?
+        let leadingContextTrim: Int
+        let trailingContextTrim: Int
+    }
+
+    private let baseExpected: [String]
+    private let baseExpectedKinds: [ExpectedKind]
+    private let baseReplacement: [String]
+    private let baseReplacementKinds: [ReplacementKind]
+    private let baseExpectedTrailingNewline: Bool?
+    private let baseReplacementTrailingNewline: Bool?
 
     init(hunk: PatchHunk) throws {
         var expected: [String] = []
+        var expectedKinds: [ExpectedKind] = []
         var replacement: [String] = []
+        var replacementKinds: [ReplacementKind] = []
         var expectedTrailing: Bool?
         var replacementTrailing: Bool?
         var lastMeaningfulLine: PatchLine?
@@ -501,13 +632,17 @@ private struct HunkTransform {
             switch line {
             case .context(let value):
                 expected.append(value)
+                expectedKinds.append(.context)
                 replacement.append(value)
+                replacementKinds.append(.context)
                 lastMeaningfulLine = line
             case .addition(let value):
                 replacement.append(value)
+                replacementKinds.append(.addition)
                 lastMeaningfulLine = line
             case .deletion(let value):
                 expected.append(value)
+                expectedKinds.append(.deletion)
                 lastMeaningfulLine = line
             case .noNewlineMarker:
                 guard let last = lastMeaningfulLine else {
@@ -524,9 +659,106 @@ private struct HunkTransform {
             }
         }
 
-        self.expected = expected
-        self.replacement = replacement
-        self.expectedTrailingNewline = expectedTrailing
-        self.replacementTrailingNewline = replacementTrailing
+        self.baseExpected = expected
+        self.baseExpectedKinds = expectedKinds
+        self.baseReplacement = replacement
+        self.baseReplacementKinds = replacementKinds
+        self.baseExpectedTrailingNewline = expectedTrailing
+        self.baseReplacementTrailingNewline = replacementTrailing
+    }
+
+    func variants(contextTolerance: Int) -> [Variant] {
+        var variants: [Variant] = []
+        let maxLeading = min(leadingContextCount, contextTolerance)
+
+        for leadingTrim in 0...maxLeading {
+            let remaining = contextTolerance - leadingTrim
+            let maxTrailing = min(trailingContextCount, remaining)
+            for trailingTrim in 0...maxTrailing {
+                variants.append(buildVariant(leadingTrim: leadingTrim, trailingTrim: trailingTrim))
+            }
+        }
+
+        return variants.sorted { lhs, rhs in
+            let lhsTrim = lhs.leadingContextTrim + lhs.trailingContextTrim
+            let rhsTrim = rhs.leadingContextTrim + rhs.trailingContextTrim
+            if lhsTrim != rhsTrim {
+                return lhsTrim < rhsTrim
+            }
+            return lhs.leadingContextTrim < rhs.leadingContextTrim
+        }
+    }
+
+    private func buildVariant(leadingTrim: Int, trailingTrim: Int) -> Variant {
+        var expected = baseExpected
+        var expectedKinds = baseExpectedKinds
+
+        if leadingTrim > 0 {
+            let prefixKinds = expectedKinds.prefix(leadingTrim)
+            guard prefixKinds.allSatisfy({ $0 == .context }) else {
+                preconditionFailure("Attempted to trim non-context lines from hunk prefix")
+            }
+            expected.removeFirst(leadingTrim)
+            expectedKinds.removeFirst(leadingTrim)
+        }
+
+        if trailingTrim > 0 {
+            let suffixKinds = expectedKinds.suffix(trailingTrim)
+            guard suffixKinds.allSatisfy({ $0 == .context }) else {
+                preconditionFailure("Attempted to trim non-context lines from hunk suffix")
+            }
+            expected.removeLast(trailingTrim)
+            expectedKinds.removeLast(trailingTrim)
+        }
+
+        var replacement = baseReplacement
+        var replacementKinds = baseReplacementKinds
+
+        var leadingToRemove = leadingTrim
+        while leadingToRemove > 0 {
+            guard let index = replacementKinds.firstIndex(of: .context) else {
+                preconditionFailure("Missing context entries while trimming hunk prefix")
+            }
+            replacement.remove(at: index)
+            replacementKinds.remove(at: index)
+            leadingToRemove -= 1
+        }
+
+        var trailingToRemove = trailingTrim
+        while trailingToRemove > 0 {
+            guard let index = replacementKinds.lastIndex(of: .context) else {
+                preconditionFailure("Missing context entries while trimming hunk suffix")
+            }
+            replacement.remove(at: index)
+            replacementKinds.remove(at: index)
+            trailingToRemove -= 1
+        }
+
+        return Variant(
+            expected: expected,
+            replacement: replacement,
+            expectedTrailingNewline: baseExpectedTrailingNewline,
+            replacementTrailingNewline: baseReplacementTrailingNewline,
+            leadingContextTrim: leadingTrim,
+            trailingContextTrim: trailingTrim
+        )
+    }
+
+    private var leadingContextCount: Int {
+        var count = 0
+        for kind in baseExpectedKinds {
+            guard kind == .context else { break }
+            count += 1
+        }
+        return count
+    }
+
+    private var trailingContextCount: Int {
+        var count = 0
+        for kind in baseExpectedKinds.reversed() {
+            guard kind == .context else { break }
+            count += 1
+        }
+        return count
     }
 }

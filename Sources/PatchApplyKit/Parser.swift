@@ -5,116 +5,189 @@ public struct PatchParser {
     private static let nullDevicePath = "/dev/null"
     private static let hunkHeaderRegex: NSRegularExpression = {
         let pattern = "^@@\\s*-(\\d+)(?:,(\\d+))?\\s+\\+(\\d+)(?:,(\\d+))?\\s*@@(.*)$"
-        return try! NSRegularExpression(pattern: pattern, options: [])
+        do {
+            return try NSRegularExpression(pattern: pattern, options: [])
+        } catch {
+            preconditionFailure("Failed to compile hunk header regex: \(error)")
+        }
     }()
 
     public init() {}
 
     public func parse(tokens: [PatchToken]) throws -> PatchPlan {
+        let bounds = try determinePatchBounds(in: tokens)
+        var index = bounds.start + 1
+        var headers: [String] = []
+        var directives: [PatchDirective] = []
+        var pendingHeader: String?
+        var pendingMetadataLines: [String] = []
+
+        while index < bounds.end {
+            let token = tokens[index]
+            switch token {
+            case let .header(line):
+                headers.append(line)
+                pendingHeader = line
+                index += 1
+            case let .metadata(line):
+                try appendMetadata(line, to: &pendingMetadataLines)
+                index += 1
+            case .fileOld:
+                let result = try parseDirectiveBlock(
+                    tokens: tokens,
+                    startingAt: index,
+                    boundary: bounds.end,
+                    pendingHeader: pendingHeader,
+                    pendingMetadataLines: pendingMetadataLines
+                )
+                directives.append(result.directive)
+                index = result.nextIndex
+                pendingHeader = nil
+                pendingMetadataLines.removeAll()
+            default:
+                try skipNonDirectiveToken(token, advancing: &index)
+            }
+        }
+
+        let metadata = PatchMetadata(title: headers.first)
+        return PatchPlan(metadata: metadata, directives: directives)
+    }
+}
+
+extension PatchParser {
+    func determinePatchBounds(in tokens: [PatchToken]) throws -> (start: Int, end: Int) {
         guard let beginIndex = tokens.firstIndex(of: .beginMarker) else {
             throw PatchEngineError.malformed("missing begin marker")
         }
         guard let endIndex = tokens.lastIndex(of: .endMarker), endIndex > beginIndex else {
             throw PatchEngineError.malformed("missing end marker")
         }
+        return (beginIndex, endIndex)
+    }
 
-        var index = beginIndex + 1
-        var headers: [String] = []
-        var directives: [PatchDirective] = []
-        var pendingHeader: String?
-        var pendingMetadataLines: [String] = []
+    private func appendMetadata(_ line: String, to storage: inout [String]) throws {
+        if line.lowercased().hasPrefix("binary files ") {
+            throw PatchEngineError.validationFailed("binary patches are not supported")
+        }
+        storage.append(line)
+    }
 
-        while index < endIndex {
-            let token = tokens[index]
+    private func skipNonDirectiveToken(_ token: PatchToken, advancing index: inout Int) throws {
+        if case let .other(line) = token {
+            try ensureNonBinaryOther(line)
+        }
+        index += 1
+    }
+
+    private func ensureNonBinaryOther(_ line: String) throws {
+        if line == "GIT binary patch" {
+            throw PatchEngineError.validationFailed("binary patches are not supported")
+        }
+    }
+
+    private func parseDirectiveBlock(
+        tokens: [PatchToken],
+        startingAt index: Int,
+        boundary: Int,
+        pendingHeader: String?,
+        pendingMetadataLines: [String]
+    ) throws -> (directive: PatchDirective, nextIndex: Int) {
+        guard index + 1 < boundary else {
+            throw PatchEngineError.malformed("truncated file header block")
+        }
+        guard case let .fileOld(rawOldPath) = tokens[index] else {
+            throw PatchEngineError.malformed("expected --- line")
+        }
+        guard case let .fileNew(rawNewPath) = tokens[index + 1] else {
+            throw PatchEngineError.malformed("expected +++ line after --- line")
+        }
+
+        var cursor = index + 2
+        let oldPath = interpretPath(rawOldPath)
+        let newPath = interpretPath(rawNewPath)
+        var directiveMetadataLines = pendingMetadataLines
+        var hunks: [PatchHunk] = []
+
+        while cursor < boundary {
+            let token = tokens[cursor]
             switch token {
-            case .header(let line):
-                headers.append(line)
-                pendingHeader = line
-                index += 1
-            case .metadata(let line):
-                if line.lowercased().hasPrefix("binary files ") {
-                    throw PatchEngineError.validationFailed("binary patches are not supported")
-                }
-                pendingMetadataLines.append(line)
-                index += 1
-            case .fileOld(let rawOldPath):
-                guard index + 1 < endIndex else {
-                    throw PatchEngineError.malformed("truncated file header block")
-                }
-                guard case let .fileNew(rawNewPath) = tokens[index + 1] else {
-                    throw PatchEngineError.malformed("expected +++ line after --- line")
-                }
-                index += 2
-                let oldPath = interpretPath(rawOldPath)
-                let newPath = interpretPath(rawNewPath)
-                let directiveHeader = pendingHeader
-                pendingHeader = nil
-                var directiveMetadataLines = pendingMetadataLines
-                pendingMetadataLines.removeAll()
-
-                var hunks: [PatchHunk] = []
-                directiveLoop: while index < endIndex {
-                    let nextToken = tokens[index]
-                    switch nextToken {
-                    case .hunkHeader(let headerLine):
-                        index += 1
-                        var bodyLines: [String] = []
-                        hunkBody: while index < endIndex {
-                            let candidate = tokens[index]
-                            switch candidate {
-                            case .hunkLine(let rawLine):
-                                bodyLines.append(rawLine)
-                                index += 1
-                            case .hunkHeader, .fileOld, .fileNew, .header:
-                                break hunkBody
-                            default:
-                                index += 1
-                            }
-                        }
-                        let hunk = try parseHunk(headerLine: headerLine, bodyLines: bodyLines)
-                        hunks.append(hunk)
-                    case .metadata(let line):
-                        if line.lowercased().hasPrefix("binary files ") {
-                            throw PatchEngineError.validationFailed("binary patches are not supported")
-                        }
-                        directiveMetadataLines.append(line)
-                        index += 1
-                    case .other(let line):
-                        if line == "GIT binary patch" {
-                            throw PatchEngineError.validationFailed("binary patches are not supported")
-                        }
-                        index += 1
-                    case .fileOld, .header, .fileNew:
-                        break directiveLoop
-                    default:
-                        index += 1
-                    }
-                }
-
-                let operation = determineOperation(oldPath: oldPath, newPath: newPath, header: directiveHeader)
-                let metadata = parseMetadata(lines: directiveMetadataLines)
-                let directive = PatchDirective(
-                    header: directiveHeader,
+            case let .hunkHeader(headerLine):
+                cursor += 1
+                let body = collectHunkBody(tokens: tokens, startingAt: cursor, boundary: boundary)
+                let hunk = try parseHunk(headerLine: headerLine, bodyLines: body.lines)
+                hunks.append(hunk)
+                cursor = body.nextIndex
+            case let .metadata(line):
+                try appendMetadata(line, to: &directiveMetadataLines)
+                cursor += 1
+            case .fileOld, .header, .fileNew:
+                let directive = makeDirective(
+                    header: pendingHeader,
                     oldPath: oldPath,
                     newPath: newPath,
                     hunks: hunks,
-                    operation: operation,
-                    metadata: metadata
+                    metadataLines: directiveMetadataLines
                 )
-                directives.append(directive)
-            case .other, .hunkLine, .hunkHeader, .fileNew:
-                // Skip unexpected tokens that the parser is not ready to consume in this phase.
-                index += 1
-            case .beginMarker:
-                // Nested begin markers are rejected by the tokenizer, so reaching here means stray token.
-                index += 1
-            case .endMarker:
-                break
+                return (directive, cursor)
+            case let .other(line):
+                try ensureNonBinaryOther(line)
+                cursor += 1
+            default:
+                cursor += 1
             }
         }
 
-        let metadata = PatchMetadata(title: headers.first)
-        return PatchPlan(metadata: metadata, directives: directives)
+        let directive = makeDirective(
+            header: pendingHeader,
+            oldPath: oldPath,
+            newPath: newPath,
+            hunks: hunks,
+            metadataLines: directiveMetadataLines
+        )
+        return (directive, cursor)
+    }
+
+    private func collectHunkBody(
+        tokens: [PatchToken],
+        startingAt index: Int,
+        boundary: Int
+    ) -> (lines: [String], nextIndex: Int) {
+        var bodyLines: [String] = []
+        var cursor = index
+
+        while cursor < boundary {
+            let token = tokens[cursor]
+            switch token {
+            case let .hunkLine(rawLine):
+                bodyLines.append(rawLine)
+                cursor += 1
+            case .hunkHeader, .fileOld, .fileNew, .header:
+                return (bodyLines, cursor)
+            default:
+                cursor += 1
+            }
+        }
+
+        return (bodyLines, cursor)
+    }
+
+    private func makeDirective(
+        header: String?,
+        oldPath: String?,
+        newPath: String?,
+        hunks: [PatchHunk],
+        metadataLines: [String]
+    ) -> PatchDirective {
+        let operation = determineOperation(oldPath: oldPath, newPath: newPath, header: header)
+        let metadata = parseMetadata(lines: metadataLines)
+        return PatchDirective(
+            header: header,
+            oldPath: oldPath,
+            newPath: newPath,
+            hunks: hunks,
+            operation: operation,
+            metadata: metadata
+        )
     }
 
     private func parseHunk(headerLine: String, bodyLines: [String]) throws -> PatchHunk {
@@ -147,7 +220,7 @@ public struct PatchParser {
 
     private func parseHunkHeader(_ headerLine: String) throws -> PatchHunkHeader {
         let trimmed = headerLine.trimmingCharacters(in: .whitespaces)
-        let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+        let range = NSRange(trimmed.startIndex ..< trimmed.endIndex, in: trimmed)
         guard let match = Self.hunkHeaderRegex.firstMatch(in: trimmed, options: [], range: range) else {
             throw PatchEngineError.malformed("invalid hunk header: \(headerLine)")
         }
@@ -191,77 +264,7 @@ public struct PatchParser {
         return trimmed
     }
 
-    private func parseMetadata(lines: [String]) -> PatchDirectiveMetadata {
-        guard !lines.isEmpty else { return PatchDirectiveMetadata(rawLines: []) }
-
-        var indexLine: PatchIndexLine?
-        var oldMode: String?
-        var newMode: String?
-        var similarity: Int?
-        var dissimilarity: Int?
-        var renameFrom: String?
-        var renameTo: String?
-        var copyFrom: String?
-        var copyTo: String?
-
-        for line in lines {
-            if line.hasPrefix("index ") {
-                indexLine = parseIndexLine(line)
-            } else if line.hasPrefix("new file mode ") {
-                newMode = line.components(separatedBy: "new file mode ").last?.trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("new file executable mode ") {
-                newMode = line.components(separatedBy: "new file executable mode ").last?.trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("deleted file mode ") {
-                oldMode = line.components(separatedBy: "deleted file mode ").last?.trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("deleted file executable mode ") {
-                oldMode = line.components(separatedBy: "deleted file executable mode ").last?.trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("old mode ") {
-                oldMode = line.components(separatedBy: "old mode ").last?.trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("new mode ") {
-                newMode = line.components(separatedBy: "new mode ").last?.trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("mode change ") {
-                let payload = line.dropFirst("mode change ".count)
-                let parts = payload.split(whereSeparator: { $0 == " " || $0 == "=" || $0 == ">" })
-                if parts.count >= 2 {
-                    oldMode = String(parts[0])
-                    newMode = String(parts[1])
-                }
-            } else if line.hasPrefix("similarity index ") {
-                similarity = parsePercentage(line, prefix: "similarity index ")
-            } else if line.hasPrefix("dissimilarity index ") {
-                dissimilarity = parsePercentage(line, prefix: "dissimilarity index ")
-            } else if line.hasPrefix("rename from ") {
-                renameFrom = line.components(separatedBy: "rename from ").last?.trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("rename to ") {
-                renameTo = line.components(separatedBy: "rename to ").last?.trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("copy from ") {
-                copyFrom = line.components(separatedBy: "copy from ").last?.trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("copy to ") {
-                copyTo = line.components(separatedBy: "copy to ").last?.trimmingCharacters(in: .whitespaces)
-            }
-        }
-
-        let modeChange: PatchFileModeChange?
-        if oldMode != nil || newMode != nil {
-            modeChange = PatchFileModeChange(oldMode: oldMode, newMode: newMode)
-        } else {
-            modeChange = nil
-        }
-
-        return PatchDirectiveMetadata(
-            index: indexLine,
-            fileModeChange: modeChange,
-            similarityIndex: similarity,
-            dissimilarityIndex: dissimilarity,
-            renameFrom: renameFrom,
-            renameTo: renameTo,
-            copyFrom: copyFrom,
-            copyTo: copyTo,
-            rawLines: lines
-        )
-    }
-
-    private func parseIndexLine(_ line: String) -> PatchIndexLine? {
+    func parseIndexLine(_ line: String) -> PatchIndexLine? {
         let components = line.split(separator: " ")
         guard components.count >= 2 else { return nil }
         let hashComponent = String(components[1])
@@ -270,12 +273,6 @@ public struct PatchParser {
         let newHash = String(hashComponent[range.upperBound...])
         let mode = components.count >= 3 ? String(components[2]) : nil
         return PatchIndexLine(oldHash: oldHash, newHash: newHash, mode: mode)
-    }
-
-    private func parsePercentage(_ line: String, prefix: String) -> Int? {
-        let value = line.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
-        let trimmed = value.hasSuffix("%") ? String(value.dropLast()) : value
-        return Int(trimmed)
     }
 
     private func dropGitPrefix(from path: String) -> String? {

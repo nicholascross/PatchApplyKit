@@ -17,7 +17,7 @@ public struct PatchApplier {
         self.tokenizer = tokenizer
         self.parser = parser
         self.validator = validator
-        self.applicator = PatchApplicator(fileSystem: fileSystem, configuration: configuration)
+        applicator = PatchApplicator(fileSystem: fileSystem, configuration: configuration)
     }
 
     /// Applies a unified diff that is wrapped by `*** Begin Patch` / `*** End Patch` sentinels.

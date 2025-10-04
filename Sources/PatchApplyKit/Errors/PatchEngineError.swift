@@ -8,11 +8,11 @@ public enum PatchEngineError: Error, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .malformed(let message):
+        case let .malformed(message):
             return "Malformed patch – \(message)"
-        case .validationFailed(let message):
+        case let .validationFailed(message):
             return "Patch validation failed – \(message)"
-        case .ioFailure(let message):
+        case let .ioFailure(message):
             return "File system error – \(message)"
         }
     }

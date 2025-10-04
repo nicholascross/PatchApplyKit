@@ -1,6 +1,6 @@
-import XCTest
 import Foundation
 @testable import PatchApplyKit
+import XCTest
 
 final class TokenizerParserTests: XCTestCase {
     private let tokenizer = PatchTokenizer()
@@ -80,7 +80,8 @@ final class TokenizerParserTests: XCTestCase {
         XCTAssertEqual(modification.oldPath, "Sources/App/FeatureService.swift")
         XCTAssertEqual(modification.newPath, "Sources/App/FeatureService.swift")
         XCTAssertEqual(modification.hunks.count, 1)
-        XCTAssertEqual(modification.metadata.index, PatchIndexLine(oldHash: "6b7f123", newHash: "9d0a456", mode: "100644"))
+        let expectedIndex = PatchIndexLine(oldHash: "6b7f123", newHash: "9d0a456", mode: "100644")
+        XCTAssertEqual(modification.metadata.index, expectedIndex)
         let modificationHunk = try XCTUnwrap(modification.hunks.last)
         XCTAssertEqual(modificationHunk.lines.last, PatchLine.noNewlineMarker)
 

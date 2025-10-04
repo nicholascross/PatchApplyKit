@@ -1,5 +1,5 @@
-import XCTest
 @testable import PatchApplyKit
+import XCTest
 
 final class ValidatorTests: XCTestCase {
     private let validator = PatchValidator()
@@ -13,7 +13,11 @@ final class ValidatorTests: XCTestCase {
     }
 
     func testValidatorRejectsDuplicateModifyPaths() {
-        let header = PatchHunkHeader(oldRange: PatchLineRange(start: 1, length: 1), newRange: PatchLineRange(start: 1, length: 1), sectionHeading: nil)
+        let header = PatchHunkHeader(
+            oldRange: PatchLineRange(start: 1, length: 1),
+            newRange: PatchLineRange(start: 1, length: 1),
+            sectionHeading: nil
+        )
         let lines: [PatchLine] = [.deletion("old"), .addition("new")]
         let hunk = PatchHunk(header: header, lines: lines)
         let first = PatchDirective(oldPath: "file.txt", newPath: "file.txt", hunks: [hunk], operation: .modify)
@@ -59,7 +63,16 @@ final class ValidatorTests: XCTestCase {
         let directive = PatchDirective(
             oldPath: nil,
             newPath: "file.txt",
-            hunks: [PatchHunk(header: PatchHunkHeader(oldRange: nil, newRange: PatchLineRange(start: 1, length: 1), sectionHeading: nil), lines: [.addition("content")])],
+            hunks: [
+                PatchHunk(
+                    header: PatchHunkHeader(
+                        oldRange: nil,
+                        newRange: PatchLineRange(start: 1, length: 1),
+                        sectionHeading: nil
+                    ),
+                    lines: [.addition("content")]
+                )
+            ],
             operation: .add,
             metadata: metadata
         )

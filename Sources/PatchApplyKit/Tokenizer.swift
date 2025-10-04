@@ -43,54 +43,69 @@ public struct PatchTokenizer {
     public func tokenize(_ text: String) throws -> [PatchToken] {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var tokens: [PatchToken] = []
-        var isInPatch = false
-        var hasEndMarker = false
+        var state = TokenizerState()
 
         for line in lines {
-            if line == beginMarker {
-                guard !isInPatch else {
-                    throw PatchEngineError.malformed("nested begin markers detected")
-                }
-                tokens.append(.beginMarker)
-                isInPatch = true
-                continue
-            }
-            if line == endMarker {
-                guard isInPatch else {
-                    throw PatchEngineError.malformed("end marker encountered before begin marker")
-                }
-                tokens.append(.endMarker)
-                isInPatch = false
-                hasEndMarker = true
-                continue
-            }
-            guard isInPatch else {
-                // Ignore any preamble prior to the begin marker.
-                continue
-            }
-
-            if line.hasPrefix("--- ") {
-                tokens.append(.fileOld(String(line.dropFirst(4))))
-            } else if line.hasPrefix("+++ ") {
-                tokens.append(.fileNew(String(line.dropFirst(4))))
-            } else if metadataPrefixes.contains(where: line.hasPrefix) {
-                tokens.append(.metadata(line))
-            } else if line.hasPrefix("@@") {
-                tokens.append(.hunkHeader(line))
-            } else if line.hasPrefix("+") || line.hasPrefix("-") || line.hasPrefix(" ") || line.hasPrefix("\\") {
-                tokens.append(.hunkLine(line))
-            } else if line.hasPrefix("*** ") {
-                tokens.append(.header(line))
-            } else if line.isEmpty {
-                tokens.append(.hunkLine(line))
-            } else {
-                tokens.append(.other(line))
+            if let token = try consume(line, state: &state) {
+                tokens.append(token)
             }
         }
 
-        guard hasEndMarker else {
+        guard state.hasEndMarker else {
             throw PatchEngineError.malformed("missing end marker")
         }
         return tokens
+    }
+
+    private struct TokenizerState {
+        var isInPatch = false
+        var hasEndMarker = false
+    }
+
+    private func consume(_ line: String, state: inout TokenizerState) throws -> PatchToken? {
+        if line == beginMarker {
+            guard !state.isInPatch else {
+                throw PatchEngineError.malformed("nested begin markers detected")
+            }
+            state.isInPatch = true
+            return .beginMarker
+        }
+        if line == endMarker {
+            guard state.isInPatch else {
+                throw PatchEngineError.malformed("end marker encountered before begin marker")
+            }
+            state.isInPatch = false
+            state.hasEndMarker = true
+            return .endMarker
+        }
+        guard state.isInPatch else {
+            return nil
+        }
+        return classifyContent(line)
+    }
+
+    private func classifyContent(_ line: String) -> PatchToken {
+        if line.hasPrefix("--- ") {
+            return .fileOld(String(line.dropFirst(4)))
+        }
+        if line.hasPrefix("+++ ") {
+            return .fileNew(String(line.dropFirst(4)))
+        }
+        if metadataPrefixes.contains(where: line.hasPrefix) {
+            return .metadata(line)
+        }
+        if line.hasPrefix("@@") {
+            return .hunkHeader(line)
+        }
+        if line.hasPrefix("+") || line.hasPrefix("-") || line.hasPrefix(" ") || line.hasPrefix("\\") {
+            return .hunkLine(line)
+        }
+        if line.hasPrefix("*** ") {
+            return .header(line)
+        }
+        if line.isEmpty {
+            return .hunkLine(line)
+        }
+        return .other(line)
     }
 }

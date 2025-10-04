@@ -91,4 +91,120 @@ final class ValidatorTests: XCTestCase {
         let plan = try parser.parse(tokens: tokens)
         XCTAssertNoThrow(try validator.validate(plan))
     }
+
+    func testValidatorRejectsCarriageReturnInAddition() {
+        let header = PatchHunkHeader(
+            oldRange: PatchLineRange(start: 1, length: 1),
+            newRange: PatchLineRange(start: 1, length: 1),
+            sectionHeading: nil
+        )
+        let hunk = PatchHunk(header: header, lines: [.deletion("old"), .addition("new\rvalue")])
+        let directive = PatchDirective(oldPath: "file.txt", newPath: "file.txt", hunks: [hunk], operation: .modify)
+        let plan = PatchPlan(metadata: PatchMetadata(), directives: [directive])
+        XCTAssertThrowsError(try validator.validate(plan)) { error in
+            guard case let PatchEngineError.validationFailed(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("Carriage return"))
+        }
+    }
+
+    func testValidatorRejectsDuplicateRenameDestinations() {
+        let first = PatchDirective(oldPath: "a.txt", newPath: "shared.txt", hunks: [], operation: .rename)
+        let second = PatchDirective(oldPath: "b.txt", newPath: "shared.txt", hunks: [], operation: .rename)
+        let plan = PatchPlan(metadata: PatchMetadata(), directives: [first, second])
+        XCTAssertThrowsError(try validator.validate(plan)) { error in
+            guard case let PatchEngineError.validationFailed(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("duplicate directive touching new path"))
+        }
+    }
+
+    func testValidatorRejectsSimilarityIndexForModify() {
+        let metadata = PatchDirectiveMetadata(
+            similarityIndex: 90,
+            rawLines: ["similarity index 90%"]
+        )
+        let header = PatchHunkHeader(
+            oldRange: PatchLineRange(start: 1, length: 1),
+            newRange: PatchLineRange(start: 1, length: 1),
+            sectionHeading: nil
+        )
+        let hunk = PatchHunk(header: header, lines: [.deletion("old"), .addition("new")])
+        let directive = PatchDirective(
+            oldPath: "file.txt",
+            newPath: "file.txt",
+            hunks: [hunk],
+            operation: .modify,
+            metadata: metadata
+        )
+        let plan = PatchPlan(metadata: PatchMetadata(), directives: [directive])
+        XCTAssertThrowsError(try validator.validate(plan)) { error in
+            guard case let PatchEngineError.validationFailed(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("similarity metadata"))
+        }
+    }
+
+    func testValidatorRejectsBinaryDeletePayload() {
+        let block = PatchBinaryPatch.Block(kind: .literal, expectedSize: 1, data: Data([0x01]))
+        let directive = PatchDirective(
+            oldPath: "file.bin",
+            newPath: nil,
+            hunks: [],
+            binaryPatch: PatchBinaryPatch(blocks: [block]),
+            operation: .delete
+        )
+        let plan = PatchPlan(metadata: PatchMetadata(), directives: [directive])
+        XCTAssertThrowsError(try validator.validate(plan)) { error in
+            guard case let PatchEngineError.validationFailed(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("must not supply new binary data"))
+        }
+    }
+
+    func testValidatorRejectsDuplicateNoNewlineMarkers() {
+        let header = PatchHunkHeader(
+            oldRange: PatchLineRange(start: 1, length: 1),
+            newRange: PatchLineRange(start: 1, length: 1),
+            sectionHeading: nil
+        )
+        let hunk = PatchHunk(header: header, lines: [.deletion("old"), .noNewlineMarker, .noNewlineMarker])
+        let directive = PatchDirective(oldPath: "file.txt", newPath: nil, hunks: [hunk], operation: .delete)
+        let plan = PatchPlan(metadata: PatchMetadata(), directives: [directive])
+        XCTAssertThrowsError(try validator.validate(plan)) { error in
+            guard case let PatchEngineError.validationFailed(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("must terminate the hunk"), "Unexpected error message: \(message)")
+        }
+    }
+
+    func testValidatorAllowsModifyAfterRenameOfSamePath() throws {
+        let rename = PatchDirective(
+            oldPath: "foo.txt",
+            newPath: "bar.txt",
+            hunks: [],
+            operation: .rename
+        )
+
+        let header = PatchHunkHeader(
+            oldRange: PatchLineRange(start: 1, length: 1),
+            newRange: PatchLineRange(start: 1, length: 1),
+            sectionHeading: nil
+        )
+        let hunk = PatchHunk(header: header, lines: [.deletion("old"), .addition("new")])
+        let modify = PatchDirective(
+            oldPath: "bar.txt",
+            newPath: "bar.txt",
+            hunks: [hunk],
+            operation: .modify
+        )
+
+        let plan = PatchPlan(metadata: PatchMetadata(), directives: [rename, modify])
+        XCTAssertNoThrow(try validator.validate(plan))
+    }
 }

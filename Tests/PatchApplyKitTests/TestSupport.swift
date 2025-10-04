@@ -252,6 +252,91 @@ enum PatchFixtures {
     +Additional examples live in `Docs/examples`.
     *** End Patch
     """#
+
+    static let ambiguousContextPatch = """
+    *** Begin Patch
+    *** Update File: repeated.txt
+    --- a/repeated.txt
+    +++ b/repeated.txt
+    @@ -0,3 +0,3 @@
+    -beta
+    -beta
+    +beta-modified
+    +beta
+    +beta-modified
+    *** End Patch
+    """
+
+    static let binaryDeltaPatch = """
+    *** Begin Patch
+    *** Update Binary File: Assets/pattern.bin
+    Binary files a/Assets/pattern.bin and b/Assets/pattern.bin differ
+    --- a/Assets/pattern.bin
+    +++ b/Assets/pattern.bin
+    GIT binary patch
+    delta 3
+    AAEC
+
+    literal 3
+    AQID
+
+    *** End Patch
+    """
+
+    static let binaryMissingPayloadPatch = """
+    *** Begin Patch
+    *** Update Binary File: Assets/pattern.bin
+    Binary files a/Assets/pattern.bin and b/Assets/pattern.bin differ
+    --- a/Assets/pattern.bin
+    +++ b/Assets/pattern.bin
+    GIT binary patch
+    literal 3
+
+    *** End Patch
+    """
+
+    static let binaryMalformedPatch = """
+    *** Begin Patch
+    *** Update Binary File: Assets/pattern.bin
+    Binary files a/Assets/pattern.bin and b/Assets/pattern.bin differ
+    --- a/Assets/pattern.bin
+    +++ b/Assets/pattern.bin
+    GIT binary patch
+    literal 3
+    abc
+
+    *** End Patch
+    """
+
+    static func makeLargeAdditionPatch(filename: String, lineCount: Int) -> String {
+        precondition(lineCount > 0, "lineCount must be positive")
+
+        let header = [
+            "*** Begin Patch",
+            "*** Add File: \(filename)",
+            "--- /dev/null",
+            "+++ b/\(filename)",
+            "@@ -0,0 +1,\(lineCount) @@"
+        ]
+
+        let body = (1...lineCount).map { index in
+            let label = String(format: "line%03d", index)
+            return "+\(label)"
+        }
+
+        let footer = ["*** End Patch"]
+
+        return (header + body + footer).joined(separator: "\n") + "\n"
+    }
+
+    static func makeNumberedFile(lineCount: Int) -> String {
+        precondition(lineCount >= 0, "lineCount must be non-negative")
+        guard lineCount > 0 else { return "" }
+        let lines = (1...lineCount).map { index in
+            String(format: "line%03d", index)
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
 }
 
 final class InMemoryFileSystem: PatchFileSystem {
@@ -309,6 +394,13 @@ final class InMemoryFileSystem: PatchFileSystem {
         }
         entry.permissions = permissions
         storage[path] = entry
+    }
+
+    func posixPermissions(at path: String) throws -> UInt16? {
+        guard let entry = storage[path] else {
+            throw FileError.notFound(path)
+        }
+        return entry.permissions
     }
 
     func string(at path: String) -> String? {

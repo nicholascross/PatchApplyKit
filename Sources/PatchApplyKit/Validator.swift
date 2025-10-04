@@ -6,10 +6,10 @@ public struct PatchValidator {
 
     public func validate(_ plan: PatchPlan) throws {
         var seenOldPaths = Set<String>()
-        var seenNewPaths = Set<String>()
+        var newPathOwners = [String: PatchOperation]()
 
         for directive in plan.directives {
-            try validatePaths(for: directive, seenOldPaths: &seenOldPaths, seenNewPaths: &seenNewPaths)
+            try validatePaths(for: directive, seenOldPaths: &seenOldPaths, newPathOwners: &newPathOwners)
             try validateHunks(directive.hunks, for: directive.operation)
             try validateMetadata(for: directive)
         }
@@ -18,7 +18,7 @@ public struct PatchValidator {
     private func validatePaths(
         for directive: PatchDirective,
         seenOldPaths: inout Set<String>,
-        seenNewPaths: inout Set<String>
+        newPathOwners: inout [String: PatchOperation]
     ) throws {
         switch directive.operation {
         case .add:
@@ -28,9 +28,10 @@ public struct PatchValidator {
             guard let newPath = directive.newPath else {
                 throw PatchEngineError.validationFailed("add directive missing destination path")
             }
-            guard seenNewPaths.insert(newPath).inserted else {
+            guard newPathOwners[newPath] == nil else {
                 throw PatchEngineError.validationFailed("duplicate new-path directive for \(newPath)")
             }
+            newPathOwners[newPath] = .add
             guard !directive.hunks.isEmpty || directive.binaryPatch != nil else {
                 throw PatchEngineError.validationFailed("add directive for \(newPath) is missing content")
             }
@@ -54,9 +55,7 @@ public struct PatchValidator {
             guard seenOldPaths.insert(oldPath).inserted else {
                 throw PatchEngineError.validationFailed("duplicate modify directive for \(oldPath)")
             }
-            guard seenNewPaths.insert(newPath).inserted else {
-                throw PatchEngineError.validationFailed("duplicate modify directive for \(newPath)")
-            }
+            try trackNewPath(newPath, for: directive.operation, owners: &newPathOwners)
             guard !directive.hunks.isEmpty || directive.binaryPatch != nil else {
                 throw PatchEngineError.validationFailed("modify directive for \(oldPath) is missing content changes")
             }
@@ -67,16 +66,37 @@ public struct PatchValidator {
             guard seenOldPaths.insert(oldPath).inserted else {
                 throw PatchEngineError.validationFailed("duplicate directive touching old path \(oldPath)")
             }
-            guard seenNewPaths.insert(newPath).inserted else {
+            guard newPathOwners[newPath] == nil else {
                 throw PatchEngineError.validationFailed("duplicate directive touching new path \(newPath)")
             }
+            newPathOwners[newPath] = .rename
         case .copy:
             guard let oldPath = directive.oldPath, let newPath = directive.newPath, oldPath != newPath else {
                 throw PatchEngineError.validationFailed("copy directive requires distinct old and new paths")
             }
-            guard seenNewPaths.insert(newPath).inserted else {
+            guard newPathOwners[newPath] == nil else {
                 throw PatchEngineError.validationFailed("duplicate directive touching new path \(newPath)")
             }
+            newPathOwners[newPath] = .copy
+        }
+    }
+
+    private func trackNewPath(
+        _ path: String,
+        for operation: PatchOperation,
+        owners: inout [String: PatchOperation]
+    ) throws {
+        if let existing = owners[path] {
+            switch (existing, operation) {
+            case (.add, .modify), (.rename, .modify), (.copy, .modify):
+                owners[path] = .modify
+            case (.modify, .modify):
+                throw PatchEngineError.validationFailed("duplicate modify directive for \(path)")
+            default:
+                throw PatchEngineError.validationFailed("duplicate directive touching new path \(path)")
+            }
+        } else {
+            owners[path] = operation
         }
     }
 

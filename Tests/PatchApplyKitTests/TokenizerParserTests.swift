@@ -122,4 +122,34 @@ final class TokenizerParserTests: XCTestCase {
         XCTAssertEqual(rename.metadata.renameTo, "Docs/README.md")
         XCTAssertEqual(rename.hunks.count, 1)
     }
+
+    func testParserCapturesBinaryDeltaBlocks() throws {
+        let tokens = try tokenizer.tokenize(PatchFixtures.binaryDeltaPatch)
+        let plan = try parser.parse(tokens: tokens)
+        let directive = try XCTUnwrap(plan.directives.first)
+        let binary = try XCTUnwrap(directive.binaryPatch)
+        XCTAssertEqual(binary.blocks.map { $0.kind }, [.delta, .literal])
+        XCTAssertEqual(binary.newBlock?.data, Data([0x00, 0x01, 0x02]))
+        XCTAssertEqual(binary.oldBlock?.data, Data([0x01, 0x02, 0x03]))
+    }
+
+    func testParserRejectsBinaryPatchWithMissingPayload() throws {
+        let tokens = try tokenizer.tokenize(PatchFixtures.binaryMissingPayloadPatch)
+        XCTAssertThrowsError(try parser.parse(tokens: tokens)) { error in
+            guard case let PatchEngineError.malformed(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("binary block"), "Unexpected error message: \(message)")
+        }
+    }
+
+    func testParserRejectsBinaryPatchWithInvalidBase64() throws {
+        let tokens = try tokenizer.tokenize(PatchFixtures.binaryMalformedPatch)
+        XCTAssertThrowsError(try parser.parse(tokens: tokens)) { error in
+            guard case let PatchEngineError.malformed(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("base64"), "Unexpected error message: \(message)")
+        }
+    }
 }

@@ -287,4 +287,53 @@ final class ApplicatorTests: XCTestCase {
         ].joined(separator: "\n") + "\n"
         XCTAssertEqual(fs.string(at: "Docs/README.md"), expectedDocsReadme)
     }
+
+    func testApplierRejectsAmbiguousContextMatch() throws {
+        let content = Array(repeating: "beta", count: 6).joined(separator: "\n") + "\n"
+        let fs = InMemoryFileSystem(initialFiles: ["repeated.txt": content])
+        let applier = PatchApplier(fileSystem: fs)
+
+        XCTAssertThrowsError(try applier.apply(text: PatchFixtures.ambiguousContextPatch)) { error in
+            guard case let PatchEngineError.validationFailed(message) = error else {
+                return XCTFail("Unexpected error type: \(error)")
+            }
+            XCTAssertTrue(message.contains("ambiguous hunk match"), "Unexpected error message: \(message)")
+        }
+    }
+
+    func testApplierHandlesLargeAdditionPatch() throws {
+        let fs = InMemoryFileSystem()
+        let applier = PatchApplier(fileSystem: fs)
+
+        let patch = PatchFixtures.makeLargeAdditionPatch(filename: "big.txt", lineCount: 200)
+        try applier.apply(text: patch)
+
+        let contents = try XCTUnwrap(fs.string(at: "big.txt"))
+        let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
+        XCTAssertEqual(lines.count, 201)
+        XCTAssertTrue(lines.first?.hasPrefix("line001") ?? false)
+        XCTAssertEqual(lines.dropLast().last, "line200")
+        XCTAssertEqual(contents.last, "\n")
+    }
+
+    func testRenameWithHunksPreservesPermissionsWhenMetadataAbsent() throws {
+        let fs = InMemoryFileSystem(initialFiles: ["foo.txt": "foo\n"])
+        try fs.setPOSIXPermissions(UInt16(0o0755), at: "foo.txt")
+
+        let applier = PatchApplier(fileSystem: fs)
+        try applier.apply(text: PatchFixtures.renameFooToBar)
+
+        XCTAssertFalse(fs.fileExists(at: "foo.txt"))
+        XCTAssertEqual(fs.permissions(at: "bar.txt"), UInt16(0o0755))
+    }
+
+    func testCopyWithHunksInheritsPermissionsWhenMetadataAbsent() throws {
+        let fs = InMemoryFileSystem(initialFiles: ["hello.txt": "Hello\nWorld\n"])
+        try fs.setPOSIXPermissions(UInt16(0o0740), at: "hello.txt")
+
+        let applier = PatchApplier(fileSystem: fs)
+        try applier.apply(text: PatchFixtures.copyHelloWithWelcome)
+
+        XCTAssertEqual(fs.permissions(at: "welcome.txt"), UInt16(0o0740))
+    }
 }

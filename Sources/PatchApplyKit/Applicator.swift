@@ -8,6 +8,7 @@ public protocol PatchFileSystem {
     func removeItem(at path: String) throws
     func moveItem(from source: String, to destination: String) throws
     func setPOSIXPermissions(_ permissions: UInt16, at path: String) throws
+    func posixPermissions(at path: String) throws -> UInt16?
 }
 
 /// Default implementation backed by `FileManager`.
@@ -49,6 +50,14 @@ public struct LocalFileSystem: PatchFileSystem {
     public func setPOSIXPermissions(_ permissions: UInt16, at path: String) throws {
         let attributes: [FileAttributeKey: Any] = [.posixPermissions: NSNumber(value: permissions)]
         try fileManager.setAttributes(attributes, ofItemAtPath: path)
+    }
+
+    public func posixPermissions(at path: String) throws -> UInt16? {
+        let attributes = try fileManager.attributesOfItem(atPath: path)
+        guard let value = attributes[.posixPermissions] as? NSNumber else {
+            return nil
+        }
+        return UInt16(truncating: value)
     }
 }
 
@@ -103,6 +112,11 @@ public struct SandboxedFileSystem: PatchFileSystem {
     public func setPOSIXPermissions(_ permissions: UInt16, at path: String) throws {
         let resolved = try resolve(path)
         try base.setPOSIXPermissions(permissions, at: resolved.path)
+    }
+
+    public func posixPermissions(at path: String) throws -> UInt16? {
+        let resolved = try resolve(path)
+        return try base.posixPermissions(at: resolved.path)
     }
 
     private func resolve(_ path: String) throws -> URL {
@@ -267,6 +281,8 @@ public struct PatchApplicator {
             throw PatchEngineError.validationFailed("rename directive must target a different path")
         }
 
+        let originalPermissions = capturePermissions(at: oldPath)
+
         if let binaryPatch = directive.binaryPatch {
             let originalData = try loadBinary(at: oldPath)
             if let expectedOld = binaryPatch.oldData {
@@ -276,6 +292,7 @@ public struct PatchApplicator {
             try write(data: replacement, to: newPath)
             try remove(path: oldPath)
             try applyFileMode(for: directive, to: newPath)
+            try applyInheritedPermissions(originalPermissions, to: newPath, directive: directive)
             return
         }
 
@@ -290,6 +307,7 @@ public struct PatchApplicator {
         try write(buffer: buffer, to: newPath)
         try remove(path: oldPath)
         try applyFileMode(for: directive, to: newPath)
+        try applyInheritedPermissions(originalPermissions, to: newPath, directive: directive)
     }
 
     private func applyCopy(_ directive: PatchDirective) throws {
@@ -306,6 +324,8 @@ public struct PatchApplicator {
             throw PatchEngineError.validationFailed("destination already exists: \(destination)")
         }
 
+        let sourcePermissions = capturePermissions(at: source)
+
         if let binaryPatch = directive.binaryPatch {
             let sourceData = try loadBinary(at: source)
             if let expectedOld = binaryPatch.oldData {
@@ -314,6 +334,7 @@ public struct PatchApplicator {
             let payload = binaryPatch.newData ?? sourceData
             try write(data: payload, to: destination)
             try applyFileMode(for: directive, to: destination)
+            try applyInheritedPermissions(sourcePermissions, to: destination, directive: directive)
             return
         }
 
@@ -321,6 +342,7 @@ public struct PatchApplicator {
             let sourceData = try loadBinary(at: source)
             try write(data: sourceData, to: destination)
             try applyFileMode(for: directive, to: destination)
+            try applyInheritedPermissions(sourcePermissions, to: destination, directive: directive)
             return
         }
 
@@ -330,6 +352,7 @@ public struct PatchApplicator {
         }
         try write(buffer: buffer, to: destination)
         try applyFileMode(for: directive, to: destination)
+        try applyInheritedPermissions(sourcePermissions, to: destination, directive: directive)
     }
 
     private func buildBufferForAddition(hunks: [PatchHunk]) throws -> TextBuffer {
@@ -534,11 +557,7 @@ public struct PatchApplicator {
     private func applyFileMode(for directive: PatchDirective, to path: String) throws {
         guard let newMode = directive.metadata.fileModeChange?.newMode else { return }
         guard let permissions = parsePermissions(from: newMode) else { return }
-        do {
-            try fileSystem.setPOSIXPermissions(permissions, at: path)
-        } catch {
-            throw PatchEngineError.ioFailure("failed to set permissions on \(path): \(error)")
-        }
+        try setPermissions(permissions, at: path)
     }
 
     private func parsePermissions(from modeString: String) -> UInt16? {
@@ -547,6 +566,27 @@ public struct PatchApplicator {
             .replacingOccurrences(of: " ", with: "")
         guard !cleaned.isEmpty, let value = UInt32(cleaned, radix: 8) else { return nil }
         return UInt16(value & 0o7777)
+    }
+
+    private func capturePermissions(at path: String) -> UInt16? {
+        guard let permissions = try? fileSystem.posixPermissions(at: path) else {
+            return nil
+        }
+        return permissions
+    }
+
+    private func applyInheritedPermissions(_ permissions: UInt16?, to path: String, directive: PatchDirective) throws {
+        guard directive.metadata.fileModeChange?.newMode == nil else { return }
+        guard let permissions else { return }
+        try setPermissions(permissions, at: path)
+    }
+
+    private func setPermissions(_ permissions: UInt16, at path: String) throws {
+        do {
+            try fileSystem.setPOSIXPermissions(permissions, at: path)
+        } catch {
+            throw PatchEngineError.ioFailure("failed to set permissions on \(path): \(error)")
+        }
     }
 }
 

@@ -47,6 +47,22 @@ final class TokenizerParserTests: XCTestCase {
         ])
     }
 
+    func testParserAcceptsMinimalAddHunkHeader() throws {
+        let tokens = try tokenizer.tokenize(PatchFixtures.addGreetMinimalHeader)
+        let plan = try parser.parse(tokens: tokens)
+        let directive = try XCTUnwrap(plan.directives.first)
+        XCTAssertEqual(directive.operation, .add)
+        XCTAssertNil(directive.oldPath)
+        XCTAssertEqual(directive.newPath, "greet-minimal.txt")
+        let hunk = try XCTUnwrap(directive.hunks.first)
+        XCTAssertNil(hunk.header.oldRange)
+        XCTAssertNil(hunk.header.newRange)
+        XCTAssertEqual(hunk.lines, [
+            .addition("Hello"),
+            .addition("World")
+        ])
+    }
+
     func testParserRejectsMissingMarkers() {
         XCTAssertThrowsError(try parser.parse(tokens: [.other("--- a/file"), .endMarker]))
     }

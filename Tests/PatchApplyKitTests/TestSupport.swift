@@ -26,6 +26,17 @@ enum PatchFixtures {
     *** End Patch
     """
 
+    static let addGreetMinimalHeader = """
+    *** Begin Patch
+    *** Add File: greet-minimal.txt
+    --- /dev/null
+    +++ b/greet-minimal.txt
+    @@
+    +Hello
+    +World
+    *** End Patch
+    """
+
     static let updateHelloWithoutExclamation = """
     *** Begin Patch
     *** Update File: hello.txt

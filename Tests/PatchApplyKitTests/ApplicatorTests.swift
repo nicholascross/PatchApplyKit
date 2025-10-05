@@ -10,6 +10,13 @@ final class ApplicatorTests: XCTestCase {
         XCTAssertEqual(fileSystem.string(at: "greet.txt"), "Hello\nWorld\n")
     }
 
+    func testApplierAddsNewFileWithMinimalHunkHeader() throws {
+        let fileSystem = InMemoryFileSystem()
+        let applier = PatchApplier(fileSystem: fileSystem)
+        try applier.apply(text: PatchFixtures.addGreetMinimalHeader)
+        XCTAssertEqual(fileSystem.string(at: "greet-minimal.txt"), "Hello\nWorld\n")
+    }
+
     func testApplierModifiesExistingFile() throws {
         let fileSystem = InMemoryFileSystem(initialFiles: ["hello.txt": "Hello\nWorld\n"])
         let applier = PatchApplier(fileSystem: fileSystem)

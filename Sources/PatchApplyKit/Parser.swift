@@ -220,6 +220,9 @@ extension PatchParser {
 
     private func parseHunkHeader(_ headerLine: String) throws -> PatchHunkHeader {
         let trimmed = headerLine.trimmingCharacters(in: .whitespaces)
+        if trimmed == "@@" {
+            return PatchHunkHeader(oldRange: nil, newRange: nil, sectionHeading: nil)
+        }
         let range = NSRange(trimmed.startIndex ..< trimmed.endIndex, in: trimmed)
         guard let match = Self.hunkHeaderRegex.firstMatch(in: trimmed, options: [], range: range) else {
             throw PatchEngineError.malformed("invalid hunk header: \(headerLine)")

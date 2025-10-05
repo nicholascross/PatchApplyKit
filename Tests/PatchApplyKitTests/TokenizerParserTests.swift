@@ -63,6 +63,27 @@ final class TokenizerParserTests: XCTestCase {
         ])
     }
 
+    func testParserDerivesPathsFromHeaderWhenFileMarkersMissing() throws {
+        let tokens = try tokenizer.tokenize(PatchFixtures.updatePoemImplicitHeader)
+        let plan = try parser.parse(tokens: tokens)
+        let directive = try XCTUnwrap(plan.directives.first)
+        XCTAssertEqual(directive.operation, .modify)
+        XCTAssertEqual(directive.oldPath, "poem.txt")
+        XCTAssertEqual(directive.newPath, "poem.txt")
+        let hunk = try XCTUnwrap(directive.hunks.first)
+        XCTAssertEqual(hunk.header.oldRange, PatchLineRange(start: 2, length: 4))
+        XCTAssertEqual(hunk.header.newRange, PatchLineRange(start: 2, length: 7))
+        XCTAssertEqual(hunk.lines, [
+            .context("Wrenches whisper what to do."),
+            .context("Hammers sing with rhythmic glee,"),
+            .addition("Beneath the wood, old stories lie,"),
+            .addition("Shavings curl as time drifts by,"),
+            .addition("Each tap and turn shapes hopes that grow."),
+            .context("Saws hum gentle poetry."),
+            .context("Together, tools build dreams anew.")
+        ])
+    }
+
     func testParserRejectsMissingMarkers() {
         XCTAssertThrowsError(try parser.parse(tokens: [.other("--- a/file"), .endMarker]))
     }

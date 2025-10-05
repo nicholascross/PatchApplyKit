@@ -44,6 +44,22 @@ public struct PatchParser {
                 index = result.nextIndex
                 pendingHeader = nil
                 pendingMetadataLines.removeAll()
+            case .hunkHeader:
+                if pendingHeader != nil {
+                    let result = try parseImplicitDirectiveBlock(
+                        tokens: tokens,
+                        startingAt: index,
+                        boundary: bounds.end,
+                        pendingHeader: pendingHeader,
+                        pendingMetadataLines: pendingMetadataLines
+                    )
+                    directives.append(result.directive)
+                    index = result.nextIndex
+                    pendingHeader = nil
+                    pendingMetadataLines.removeAll()
+                } else {
+                    try skipNonDirectiveToken(token, advancing: &index)
+                }
             default:
                 try skipNonDirectiveToken(token, advancing: &index)
             }
@@ -51,6 +67,13 @@ public struct PatchParser {
 
         let metadata = PatchMetadata(title: headers.first)
         return PatchPlan(metadata: metadata, directives: directives)
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -147,6 +170,57 @@ extension PatchParser {
         return (directive, cursor)
     }
 
+    private func parseImplicitDirectiveBlock(
+        tokens: [PatchToken],
+        startingAt index: Int,
+        boundary: Int,
+        pendingHeader: String?,
+        pendingMetadataLines: [String]
+    ) throws -> (directive: PatchDirective, nextIndex: Int) {
+        guard let header = pendingHeader else {
+            throw PatchEngineError.malformed("implicit hunk encountered without preceding header")
+        }
+
+        var cursor = index
+        var directiveMetadataLines = pendingMetadataLines
+        var hunks: [PatchHunk] = []
+
+        while cursor < boundary {
+            let token = tokens[cursor]
+            switch token {
+            case let .hunkHeader(headerLine):
+                cursor += 1
+                let body = collectHunkBody(tokens: tokens, startingAt: cursor, boundary: boundary)
+                let hunk = try parseHunk(headerLine: headerLine, bodyLines: body.lines)
+                hunks.append(hunk)
+                cursor = body.nextIndex
+            case let .metadata(line):
+                try appendMetadata(line, to: &directiveMetadataLines)
+                cursor += 1
+            case .header, .fileOld, .fileNew:
+                let directive = makeDirective(
+                    header: header,
+                    oldPath: nil,
+                    newPath: nil,
+                    hunks: hunks,
+                    metadataLines: directiveMetadataLines
+                )
+                return (directive, cursor)
+            default:
+                cursor += 1
+            }
+        }
+
+        let directive = makeDirective(
+            header: header,
+            oldPath: nil,
+            newPath: nil,
+            hunks: hunks,
+            metadataLines: directiveMetadataLines
+        )
+        return (directive, cursor)
+    }
+
     private func collectHunkBody(
         tokens: [PatchToken],
         startingAt index: Int,
@@ -178,12 +252,21 @@ extension PatchParser {
         hunks: [PatchHunk],
         metadataLines: [String]
     ) -> PatchDirective {
-        let operation = determineOperation(oldPath: oldPath, newPath: newPath, header: header)
+        let resolvedPaths = resolvePaths(
+            header: header,
+            existingOldPath: oldPath,
+            existingNewPath: newPath
+        )
+        let operation = determineOperation(
+            oldPath: resolvedPaths.oldPath,
+            newPath: resolvedPaths.newPath,
+            header: header
+        )
         let metadata = parseMetadata(lines: metadataLines)
         return PatchDirective(
             header: header,
-            oldPath: oldPath,
-            newPath: newPath,
+            oldPath: resolvedPaths.oldPath,
+            newPath: resolvedPaths.newPath,
             hunks: hunks,
             operation: operation,
             metadata: metadata
@@ -265,6 +348,63 @@ extension PatchParser {
             return canonical
         }
         return trimmed
+    }
+
+    private func resolvePaths(
+        header: String?,
+        existingOldPath: String?,
+        existingNewPath: String?
+    ) -> (oldPath: String?, newPath: String?) {
+        var resolvedOld = existingOldPath
+        var resolvedNew = existingNewPath
+
+        if (resolvedOld == nil || resolvedNew == nil), let header = header,
+           let derived = derivePaths(fromHeader: header) {
+            if resolvedOld == nil {
+                resolvedOld = derived.oldPath
+            }
+            if resolvedNew == nil {
+                resolvedNew = derived.newPath
+            }
+        }
+
+        return (resolvedOld, resolvedNew)
+    }
+
+    private func derivePaths(fromHeader header: String) -> (oldPath: String?, newPath: String?)? {
+        let trimmed = header.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("*** ") else { return nil }
+        let payload = trimmed.dropFirst(4)
+        guard let colonIndex = payload.firstIndex(of: ":") else { return nil }
+
+        let operationPart = String(payload[..<colonIndex]).trimmingCharacters(in: .whitespaces)
+        let remainder = String(payload[payload.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
+        let lowerOperation = operationPart.lowercased()
+
+        switch lowerOperation {
+        case _ where lowerOperation.hasPrefix("add file"):
+            return (nil, remainder.nonEmpty)
+        case _ where lowerOperation.hasPrefix("update file"):
+            guard let path = remainder.nonEmpty else { return nil }
+            return (path, path)
+        case _ where lowerOperation.hasPrefix("delete file"):
+            return (remainder.nonEmpty, nil)
+        case _ where lowerOperation.hasPrefix("rename file"):
+            guard let pair = splitArrow(remainder) else { return nil }
+            return (pair.old, pair.new)
+        case _ where lowerOperation.hasPrefix("copy file"):
+            guard let pair = splitArrow(remainder) else { return nil }
+            return (pair.old, pair.new)
+        default:
+            return nil
+        }
+    }
+
+    private func splitArrow(_ value: String) -> (old: String?, new: String?)? {
+        guard let range = value.range(of: "->") else { return nil }
+        let oldPart = String(value[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+        let newPart = String(value[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        return (oldPart.nonEmpty, newPart.nonEmpty)
     }
 
     func parseIndexLine(_ line: String) -> PatchIndexLine? {

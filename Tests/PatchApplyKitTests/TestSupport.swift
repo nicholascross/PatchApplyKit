@@ -37,6 +37,20 @@ enum PatchFixtures {
     *** End Patch
     """
 
+    static let updatePoemImplicitHeader = """
+    *** Begin Patch
+    *** Update File: poem.txt
+    @@ -2,4 +2,7 @@
+     Wrenches whisper what to do.
+     Hammers sing with rhythmic glee,
+    +Beneath the wood, old stories lie,
+    +Shavings curl as time drifts by,
+    +Each tap and turn shapes hopes that grow.
+     Saws hum gentle poetry.
+     Together, tools build dreams anew.
+    *** End Patch
+    """
+
     static let updateHelloWithoutExclamation = """
     *** Begin Patch
     *** Update File: hello.txt

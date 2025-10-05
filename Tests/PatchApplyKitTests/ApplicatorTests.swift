@@ -17,6 +17,32 @@ final class ApplicatorTests: XCTestCase {
         XCTAssertEqual(fileSystem.string(at: "greet-minimal.txt"), "Hello\nWorld\n")
     }
 
+    func testApplierAppliesPatchWithoutFileMarkers() throws {
+        let original = [
+            "In my toolbox, old and new,",
+            "Wrenches whisper what to do.",
+            "Hammers sing with rhythmic glee,",
+            "Saws hum gentle poetry.",
+            "Together, tools build dreams anew."
+        ].joined(separator: "\n") + "\n"
+
+        let expected = [
+            "In my toolbox, old and new,",
+            "Wrenches whisper what to do.",
+            "Hammers sing with rhythmic glee,",
+            "Beneath the wood, old stories lie,",
+            "Shavings curl as time drifts by,",
+            "Each tap and turn shapes hopes that grow.",
+            "Saws hum gentle poetry.",
+            "Together, tools build dreams anew."
+        ].joined(separator: "\n") + "\n"
+
+        let fileSystem = InMemoryFileSystem(initialFiles: ["poem.txt": original])
+        let applier = PatchApplier(fileSystem: fileSystem)
+        try applier.apply(text: PatchFixtures.updatePoemImplicitHeader)
+        XCTAssertEqual(fileSystem.string(at: "poem.txt"), expected)
+    }
+
     func testApplierModifiesExistingFile() throws {
         let fileSystem = InMemoryFileSystem(initialFiles: ["hello.txt": "Hello\nWorld\n"])
         let applier = PatchApplier(fileSystem: fileSystem)

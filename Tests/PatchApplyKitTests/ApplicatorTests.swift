@@ -245,6 +245,282 @@ final class ApplicatorTests: XCTestCase {
     }
 }
 
+final class CodexPatchInputFormatTests: XCTestCase {
+    func testDefaultUnifiedDiffModeRejectsCodexShorthand() throws {
+        let fileSystem = InMemoryFileSystem(initialFiles: ["README.md": "# Old\n"])
+        let applier = PatchApplier(fileSystem: fileSystem)
+
+        XCTAssertThrowsError(try applier.apply(text: """
+        *** Begin Patch
+        *** Delete File: README.md
+        *** Add File: README.md
+        +# New
+        *** End Patch
+        """))
+        XCTAssertEqual(fileSystem.string(at: "README.md"), "# Old\n")
+    }
+
+    func testApplierAppliesCodexPatchFormatAndReportsChangedPaths() throws {
+        let fileSystem = InMemoryFileSystem(initialFiles: ["README.md": "# Old\n"])
+        let applier = PatchApplier(inputFormat: .codexApplyPatch, fileSystem: fileSystem)
+
+        let result = try applier.applyReturningResult(text: """
+        *** Begin Patch
+        *** Update File: README.md
+        --- a/README.md
+        +++ b/README.md
+        @@ -1,1 +1,2 @@
+        -# Old
+        +# Fulcrum
+        +A typed workflow runtime.
+        *** Add File: Docs/quickstart.md
+        --- /dev/null
+        +++ b/Docs/quickstart.md
+        @@ -0,0 +1,1 @@
+        +Run swift build.
+        *** End Patch
+        """)
+
+        XCTAssertEqual(result.changedPaths, ["README.md", "Docs/quickstart.md"])
+        XCTAssertEqual(fileSystem.string(at: "README.md"), "# Fulcrum\nA typed workflow runtime.\n")
+        XCTAssertEqual(fileSystem.string(at: "Docs/quickstart.md"), "Run swift build.\n")
+    }
+
+    func testApplierRepairsMissingCodexHunkPrefixes() throws {
+        let fileSystem = InMemoryFileSystem(initialFiles: [
+            "README.md": """
+            # Fulcrum
+
+            Fulcrum is a typed workflow runtime
+            for combining deterministic tools
+            with bounded model reasoning.
+            """
+        ])
+        let applier = PatchApplier(inputFormat: .codexApplyPatch, fileSystem: fileSystem)
+
+        try applier.apply(text: """
+        *** Begin Patch
+        *** Update File: README.md
+        @@
+        -# Fulcrum
+        -
+        -Fulcrum is a typed workflow runtime
+        for combining deterministic tools
+        with bounded model reasoning.
+        +# Fulcrum
+        +
+        +Fulcrum combines typed workflows, deterministic tools,
+        +and bounded model reasoning.
+        *** End Patch
+        """)
+
+        XCTAssertEqual(fileSystem.string(at: "README.md"), """
+        # Fulcrum
+
+        Fulcrum combines typed workflows, deterministic tools,
+        and bounded model reasoning.
+        """)
+    }
+
+    func testApplierExpandsCodexShorthandAddAndDeleteDirectives() throws {
+        let fileSystem = InMemoryFileSystem(initialFiles: ["README.md": "# Old\nBody\n"])
+        let applier = PatchApplier(inputFormat: .codexApplyPatch, fileSystem: fileSystem)
+
+        let result = try applier.applyReturningResult(text: """
+        *** Begin Patch
+        *** Delete File: README.md
+        *** Add File: README.md
+        +# New
+        +Replacement body.
+        *** End Patch
+        """)
+
+        XCTAssertEqual(result.changedPaths, ["README.md"])
+        XCTAssertEqual(fileSystem.string(at: "README.md"), "# New\nReplacement body.\n")
+    }
+
+    func testApplierDropsContextOnlyCodexHunks() throws {
+        let fileSystem = InMemoryFileSystem(initialFiles: [
+            "README.md": """
+            # Fulcrum
+
+            Current status
+            Old description.
+
+            Running
+            Keep this command.
+            """
+        ])
+        let applier = PatchApplier(inputFormat: .codexApplyPatch, fileSystem: fileSystem)
+
+        try applier.apply(text: """
+        *** Begin Patch
+        *** Update File: README.md
+        @@
+         # Fulcrum
+        @@
+         Current status
+        -Old description.
+        +Improved description.
+        @@
+         Running
+         Keep this command.
+        *** End Patch
+        """)
+
+        XCTAssertEqual(fileSystem.string(at: "README.md"), """
+        # Fulcrum
+
+        Current status
+        Improved description.
+
+        Running
+        Keep this command.
+        """)
+    }
+
+    func testApplierAppliesCodexHunksWithStaleLeadingAndTrailingContext() throws {
+        let fileSystem = InMemoryFileSystem(initialFiles: [
+            "README.md": """
+            # Fulcrum
+
+            Fulcrum is still changing.
+
+            ## Running
+
+            swift build
+            """
+        ])
+        let applier = PatchApplier(inputFormat: .codexApplyPatch, fileSystem: fileSystem)
+
+        try applier.apply(text: """
+        *** Begin Patch
+        *** Update File: README.md
+        @@
+         Old heading
+         ## Running
+
+        -swift build
+        +swift build
+        +swift test
+         Old trailing context
+        *** End Patch
+        """)
+
+        XCTAssertEqual(fileSystem.string(at: "README.md"), """
+        # Fulcrum
+
+        Fulcrum is still changing.
+
+        ## Running
+
+        swift build
+        swift test
+        """)
+    }
+
+    func testApplierAppliesCodexReplacementWhenOnlyChangedLinesMatchStaleContext() throws {
+        let fileSystem = InMemoryFileSystem(initialFiles: [
+            "README.md": """
+            # Fulcrum
+
+            Fulcrum is still changing.
+
+            ## Running
+
+            swift build
+            """
+        ])
+        let applier = PatchApplier(inputFormat: .codexApplyPatch, fileSystem: fileSystem)
+
+        try applier.apply(text: """
+        *** Begin Patch
+        *** Update File: README.md
+        @@
+         Stale title
+         Stale intro
+         Stale paragraph
+        -Fulcrum is still changing.
+        +Fulcrum is an early-stage Swift CLI for typed model-assisted workflows.
+         Stale status
+         Stale commands
+         Stale footer
+        *** End Patch
+        """)
+
+        XCTAssertEqual(fileSystem.string(at: "README.md"), """
+        # Fulcrum
+
+        Fulcrum is an early-stage Swift CLI for typed model-assisted workflows.
+
+        ## Running
+
+        swift build
+        """)
+    }
+
+    func testApplierRejectsCodexReplacementWhenStaleContextLeavesAmbiguousChangedLines() throws {
+        let original = """
+        # Fulcrum
+
+        Repeated sentence.
+
+        ## Details
+
+        Repeated sentence.
+        """
+        let fileSystem = InMemoryFileSystem(initialFiles: ["README.md": original])
+        let applier = PatchApplier(inputFormat: .codexApplyPatch, fileSystem: fileSystem)
+
+        XCTAssertThrowsError(try applier.apply(text: """
+        *** Begin Patch
+        *** Update File: README.md
+        @@
+         Stale title
+         Stale intro
+         Stale paragraph
+        -Repeated sentence.
+        +Specific replacement.
+         Stale status
+         Stale commands
+         Stale footer
+        *** End Patch
+        """))
+        XCTAssertEqual(fileSystem.string(at: "README.md"), original)
+    }
+
+    func testApplierAppliesCodexInsertionHunkWithOneContextAnchor() throws {
+        let fileSystem = InMemoryFileSystem(initialFiles: [
+            "README.md": """
+            # Fulcrum
+
+            ## Running
+
+            swift build
+            """
+        ])
+        let applier = PatchApplier(inputFormat: .codexApplyPatch, fileSystem: fileSystem)
+
+        try applier.apply(text: """
+        *** Begin Patch
+        *** Update File: README.md
+        @@
+         swift build
+        +swift test
+        *** End Patch
+        """)
+
+        XCTAssertEqual(fileSystem.string(at: "README.md"), """
+        # Fulcrum
+
+        ## Running
+
+        swift build
+        swift test
+        """)
+    }
+}
+
 final class SandboxedFileSystemTests: XCTestCase {
     func testSandboxedFileSystemWritesWithinRoot() throws {
         let fileManager = FileManager.default

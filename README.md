@@ -6,6 +6,7 @@ PatchApplyKit is a Swift library for parsing, validating, and applying Git-style
 
 - High-level `PatchApplier` façade that runs tokenization → parsing → validation → application.
 - Support for add, delete, modify, rename, and copy directives in a single patch stream.
+- Optional Codex apply-patch input mode for shorthand add/delete directives and relaxed hunk syntax.
 - Optional `SandboxedFileSystem` to constrain writes to a specific directory.
 - Text-based patching with POSIX permission updates.
 - Explicit rejection of binary diffs (`Binary files ...` / `GIT binary patch`).
@@ -98,6 +99,33 @@ try applier.apply(text: patch)
 ```
 
 Any attempt to escape the sandbox (e.g. `../`) raises a `PatchEngineError.ioFailure`.
+
+## Applying Codex Patch Text
+
+Use `PatchInputFormat.codexApplyPatch` for Codex apply-patch text that may omit
+file headers for updates, use shorthand add/delete directives, include
+context-only hunks, or contain hunk lines whose prefixes need repair:
+
+```swift
+import PatchApplyKit
+
+let fileSystem = SandboxedFileSystem(rootPath: workspace.path)
+let applier = PatchApplier(inputFormat: .codexApplyPatch, fileSystem: fileSystem)
+
+let result = try applier.applyReturningResult(text: """
+*** Begin Patch
+*** Delete File: README.md
+*** Add File: README.md
++# New Title
++Updated body.
+*** End Patch
+""")
+
+print(result.changedPaths) // ["README.md"]
+```
+
+The default `.unifiedDiff` input format remains strict and does not apply these
+Codex-specific normalizations.
 
 ## Customizing Whitespace and Context Matching
 

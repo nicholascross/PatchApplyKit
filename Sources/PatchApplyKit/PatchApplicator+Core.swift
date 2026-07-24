@@ -45,6 +45,27 @@ extension PatchApplicator {
         try applyFileMode(for: directive, to: path)
     }
 
+    func applyModification(
+        _ directive: PatchDirective,
+        contextToleranceForHunk: (PatchHunk) -> Int
+    ) throws {
+        guard let path = directive.newPath, let oldPath = directive.oldPath, path == oldPath else {
+            throw PatchEngineError.validationFailed(
+                "modify directive must reference the same path for old and new content"
+            )
+        }
+        guard fileSystem.fileExists(at: path) else {
+            throw PatchEngineError.validationFailed("cannot modify missing file: \(path)")
+        }
+
+        var buffer = try loadBuffer(at: path)
+        for hunk in directive.hunks {
+            try apply(hunk: hunk, to: &buffer, path: path, contextTolerance: contextToleranceForHunk(hunk))
+        }
+        try write(buffer: buffer, to: path)
+        try applyFileMode(for: directive, to: path)
+    }
+
     func applyRename(_ directive: PatchDirective) throws {
         guard let oldPath = directive.oldPath, let newPath = directive.newPath else {
             throw PatchEngineError.validationFailed("rename directive requires both old and new paths")
@@ -125,39 +146,49 @@ extension PatchApplicator {
 
     func apply(hunks: [PatchHunk], to buffer: inout TextBuffer, path: String) throws {
         for hunk in hunks {
-            let transform = try HunkTransform(hunk: hunk)
-            let match = try locateMatch(
-                transform: transform,
-                in: buffer,
-                header: hunk.header,
-                path: path
-            )
-            let variant = match.variant
-            let insertionIndex = match.insertionIndex
+            try apply(hunk: hunk, to: &buffer, path: path, contextTolerance: configuration.contextTolerance)
+        }
+    }
 
-            let matchTouchesEnd = insertionIndex + variant.expected.count == buffer.lines.count
-            if matchTouchesEnd, let expectedFlag = variant.expectedTrailingNewline {
-                guard buffer.hasTrailingNewline == expectedFlag else {
-                    throw PatchEngineError.validationFailed(
-                        "newline expectation mismatch while applying hunk to \(path)"
-                    )
-                }
-            }
+    func apply(
+        hunk: PatchHunk,
+        to buffer: inout TextBuffer,
+        path: String,
+        contextTolerance: Int
+    ) throws {
+        let transform = try HunkTransform(hunk: hunk)
+        let match = try locateMatch(
+            transform: transform,
+            in: buffer,
+            header: hunk.header,
+            path: path,
+            contextTolerance: contextTolerance
+        )
+        let variant = match.variant
+        let insertionIndex = match.insertionIndex
 
-            if variant.expected.count > 0 {
-                buffer.lines.removeSubrange(insertionIndex ..< (insertionIndex + variant.expected.count))
+        let matchTouchesEnd = insertionIndex + variant.expected.count == buffer.lines.count
+        if matchTouchesEnd, let expectedFlag = variant.expectedTrailingNewline {
+            guard buffer.hasTrailingNewline == expectedFlag else {
+                throw PatchEngineError.validationFailed(
+                    "newline expectation mismatch while applying hunk to \(path)"
+                )
             }
-            if !variant.replacement.isEmpty {
-                buffer.lines.insert(contentsOf: variant.replacement, at: insertionIndex)
-            }
+        }
 
-            let replacementTouchesEnd = insertionIndex + variant.replacement.count == buffer.lines.count
-            if replacementTouchesEnd {
-                if let replacementFlag = variant.replacementTrailingNewline {
-                    buffer.hasTrailingNewline = replacementFlag
-                } else if variant.expectedTrailingNewline != nil {
-                    buffer.hasTrailingNewline = true
-                }
+        if variant.expected.count > 0 {
+            buffer.lines.removeSubrange(insertionIndex ..< (insertionIndex + variant.expected.count))
+        }
+        if !variant.replacement.isEmpty {
+            buffer.lines.insert(contentsOf: variant.replacement, at: insertionIndex)
+        }
+
+        let replacementTouchesEnd = insertionIndex + variant.replacement.count == buffer.lines.count
+        if replacementTouchesEnd {
+            if let replacementFlag = variant.replacementTrailingNewline {
+                buffer.hasTrailingNewline = replacementFlag
+            } else if variant.expectedTrailingNewline != nil {
+                buffer.hasTrailingNewline = true
             }
         }
     }
@@ -171,9 +202,10 @@ extension PatchApplicator {
         transform: HunkTransform,
         in buffer: TextBuffer,
         header: PatchHunkHeader,
-        path: String
+        path: String,
+        contextTolerance: Int? = nil
     ) throws -> HunkMatch {
-        let variants = transform.variants(contextTolerance: configuration.contextTolerance)
+        let variants = transform.variants(contextTolerance: contextTolerance ?? configuration.contextTolerance)
 
         for variant in variants {
             if variant.expected.isEmpty {
